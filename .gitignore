@@ -1,0 +1,34 @@
+### Maven ###
+target/
+!.mvn/wrapper/maven-wrapper.jar
+dependency-reduced-pom.xml
+
+### IDEA ###
+.idea/
+*.iml
+*.iws
+*.ipr
+out/
+
+### Eclipse ###
+.classpath
+.project
+.settings/
+
+### 运行产物 ###
+checkpoints/
+savepoints/
+rocksdb/
+logs/
+*.log
+
+### 本地覆盖配置（不要把真实密码 / 钉钉 webhook 提交上去） ###
+*-local.properties
+local.properties
+.env
+.env.*
+
+### OS ###
+.DS_Store
+Thumbs.db
+desktop.ini

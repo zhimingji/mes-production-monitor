@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>com.mes.production.monitor</groupId>
+        <artifactId>mes-production-monitor</artifactId>
+        <version>1.0-SNAPSHOT</version>
+    </parent>
+
+    <artifactId>mes-production-monitor-alert</artifactId>
+    <name>mes-production-monitor-alert</name>
+    <description>作业4：报工异常告警（超报/滞后/漏报 三分类 + 分级升级状态机）-&gt; Kafka + ClickHouse + 钉钉</description>
+
+    <properties>
+        <job.main.class>com.mes.production.monitor.alert.AlertJob</job.main.class>
+    </properties>
+
+    <dependencies>
+        <dependency>
+            <groupId>com.mes.production.monitor</groupId>
+            <artifactId>mes-production-monitor-common</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.flink</groupId>
+            <artifactId>flink-streaming-java</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.flink</groupId>
+            <artifactId>flink-clients</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.flink</groupId>
+            <artifactId>flink-connector-kafka</artifactId>
+        </dependency>
+        <!-- 告警作业状态较大，必须 RocksDB + 增量 checkpoint，见文档 6.4.1 -->
+        <dependency>
+            <groupId>org.apache.flink</groupId>
+            <artifactId>flink-statebackend-rocksdb</artifactId>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-shade-plugin</artifactId>
+            </plugin>
+        </plugins>
+    </build>
+</project>

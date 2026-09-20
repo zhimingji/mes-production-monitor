@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>com.mes.production.monitor</groupId>
+        <artifactId>mes-production-monitor</artifactId>
+        <version>1.0-SNAPSHOT</version>
+    </parent>
+
+    <artifactId>mes-production-monitor-dwd</artifactId>
+    <name>mes-production-monitor-dwd</name>
+    <description>作业2：明细宽表（维表广播 join + 订单关联 + 双通道 union）-&gt; Kafka dwd-mes-report + ClickHouse</description>
+
+    <properties>
+        <job.main.class>com.mes.production.monitor.dwd.DwdWideTableJob</job.main.class>
+    </properties>
+
+    <dependencies>
+        <dependency>
+            <groupId>com.mes.production.monitor</groupId>
+            <artifactId>mes-production-monitor-common</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.flink</groupId>
+            <artifactId>flink-streaming-java</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.flink</groupId>
+            <artifactId>flink-clients</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.apache.flink</groupId>
+            <artifactId>flink-connector-kafka</artifactId>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-shade-plugin</artifactId>
+            </plugin>
+        </plugins>
+    </build>
+</project>

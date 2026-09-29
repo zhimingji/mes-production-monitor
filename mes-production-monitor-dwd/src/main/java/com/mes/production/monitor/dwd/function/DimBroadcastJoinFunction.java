@@ -117,7 +117,7 @@ public class DimBroadcastJoinFunction
         //      （建议：留空输出 + 计数，不要丢，否则对账时数量对不上还找不到原因）
         //
         // 3) 维表关联：
-        //      partcode/partname：手动报工经 order.partId 查 part；扫码直接用 modelencod/model
+        //      partcode/partname：手动报工经 order.partId 查 part；扫码直接用 modelencode/model
         //      linecode/linename：手动报工用 lot.workcenterid 查 workcenter
         //      workshop：经 order.worksiteId 或 workcenter.worksiteId 查 worksite
         //      username：手动报工用 createdbyid 查 user；扫码 users 字段本身就是用户名

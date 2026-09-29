@@ -11,7 +11,7 @@
 --      510 = 8*60 + 30
 --   2. finishedquantity > 0
 --   3. 订单号 NOT LIKE 'FG%'
---   4. 扫码通道按 (lpnbarcode, productionorderid, modelencod, model, users) 分组，
+--   4. 扫码通道按 (lpnbarcode, productionorderid, modelencode, model, users) 分组，
 --      SUM(quantity) 取报工量、MAX(scantime) 取报工时间
 -- =============================================================================
 
@@ -49,15 +49,15 @@ SELECT '{{DB}}'                                            AS db_name,
        COUNT(*)                                            AS lpn_cnt
 FROM (SELECT lpnbarcode,
              productionorderid,
-             modelencod,
+             modelencode,
              model,
              users,
              SUM(quantity)  AS qty,
              MAX(scantime)   AS scan_time
-      FROM it_barcodeautomatic
+      FROM barcodeautomatic
       WHERE scantime >= '{{FROM}}'
         AND scantime < '{{TO}}'
-      GROUP BY lpnbarcode, productionorderid, modelencod, model, users) t
+      GROUP BY lpnbarcode, productionorderid, modelencode, model, users) t
          JOIN productionorder po ON po.productionorderid = t.productionorderid
 WHERE t.qty > 0
   AND po.productionorderno NOT LIKE 'FG%'

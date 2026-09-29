@@ -11,7 +11,7 @@ import java.util.List;
  * 维表造数：worksite / workcenter / part / user。
  *
  * <p><b>引用完整性顺序（文档 9.3.1）</b>：
- * worksite → workcenter → part → user → productionorder → lot / it_barcodeautomatic。
+ * worksite → workcenter → part → user → productionorder → lot / barcodeautomatic。
  * 外键必须指向真实存在的记录，否则 join 后维度大面积为空，
  * 会被误判成 DWD 的广播竞态 bug，白排查半天。
  */

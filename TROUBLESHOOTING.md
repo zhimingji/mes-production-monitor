@@ -125,4 +125,11 @@
 
 ## 你自己踩到的坑从这里开始记
 
-### 11.
+### 11. Flink CDC 写入 Kafka 报 ProducerFencedException
+- 阶段：M1
+- 现象：Flink CDC 作业在 checkpoint 3 时失败，ods_mes_report 的 Kafka sink 算子从 RUNNING 变为 FAILED，checkpoint 被中止。
+- 报错原文：Caused by: org.apache.kafka.common.errors.ProducerFencedException: There is a newer producer with the same transactionalId which fences the current one.
+- 排查过程：发现两个 INSERT INTO ods_mes_report 共用同一张 Kafka sink 表，使用相同的 sink.transactional-id-prefix，在相同并行子任务上生成了相同的 Kafka transactional.id。
+- 根因：同一次作业提交中两个 Kafka sink 算子使用了完全相同的 transactional.id，后启动的 producer fence 了先启动的 producer，导致 checkpoint 提交事务时失败。
+- 解决：将两个 INSERT 合并为 INSERT ... UNION ALL，或拆成两张 sink 表并设置不同的 sink.transactional-id-prefix
+- 面试可讲点： Flink Kafka exactly-once 的 transactional.id 通常由 sink.transactional-id-prefix + 子任务索引 生成，同一作业内多个 sink 共用相同 prefix 会导致事务 ID 冲突并触发 ProducerFencedException

@@ -8,7 +8,7 @@ public enum OutputType {
     /** 手动报工：来源 lot 表，取 finishedquantity */
     MANUAL("MES手动报工"),
 
-    /** 过线扫码：来源 it_barcodeautomatic 表，取 quantity */
+    /** 过线扫码：来源 barcodeautomatic 表，取 quantity */
     BARCODE("过线扫码");
 
     private final String label;

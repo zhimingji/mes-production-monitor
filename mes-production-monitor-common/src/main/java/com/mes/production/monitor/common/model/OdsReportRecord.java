@@ -4,7 +4,7 @@ import java.io.Serializable;
 import java.math.BigDecimal;
 
 /**
- * ODS 层统一报工记录：两个通道（lot 手动报工 / it_barcodeautomatic 过线扫码）解析后的统一载体。
+ * ODS 层统一报工记录：两个通道（lot 手动报工 / barcodeautomatic 过线扫码）解析后的统一载体。
  *
  * <p><b>Flink POJO 规范</b>：public 类 + public 无参构造 + public 字段。不满足会静默退化成 Kryo
  * 序列化，性能差好几倍且不报错。开发期在 env 上调 {@code getConfig().disableGenericTypes()}
@@ -31,7 +31,7 @@ public class OdsReportRecord implements Serializable {
     /** 源库名，如 mes_old_zh。company / datasource 由它解析 */
     public String databaseName;
 
-    /** 源表名：lot 或 it_barcodeautomatic */
+    /** 源表名：lot 或 barcodeautomatic */
     public String tableName;
 
     // ==================== 打标签后的维度 ====================
@@ -51,7 +51,7 @@ public class OdsReportRecord implements Serializable {
     // ==================== 两个通道共有的订单键 ====================
 
     /**
-     * 生产订单 ID。lot 与 it_barcodeautomatic 均通过该字段关联
+     * 生产订单 ID。lot 与 barcodeautomatic 均通过该字段关联
      * productionorder.productionorderid，取得真实订单编号 productionorderno。
      */
     public Long productionOrderId;
@@ -65,11 +65,11 @@ public class OdsReportRecord implements Serializable {
     public Long createdDate;
     public Long createdById;
 
-    // ==================== it_barcodeautomatic 通道字段 ====================
+    // ==================== barcodeautomatic 通道字段 ====================
 
     public String barcode;
     public String lpnBarcode;
-    public String modelEncod;
+    public String modelEncode;
     public String model;
     public String users;
     public Integer quantity;

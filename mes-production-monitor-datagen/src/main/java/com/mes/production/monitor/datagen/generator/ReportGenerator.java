@@ -4,7 +4,7 @@ import com.mes.production.monitor.datagen.anomaly.AnomalyConfig;
 import com.mes.production.monitor.datagen.writer.MysqlWriter;
 
 /**
- * 报工造数：productionorder + lot（手动报工）+ it_barcodeautomatic（过线扫码）。
+ * 报工造数：productionorder + lot（手动报工）+ barcodeautomatic（过线扫码）。
  *
  * <h3>两种模式（文档 9.3.1）</h3>
  * <ul>
@@ -68,7 +68,7 @@ public class ReportGenerator {
     }
 
     /**
-     * TODO(M1-3) 生成过线扫码（it_barcodeautomatic，仅旧 MES）。
+     * TODO(M1-3) 生成过线扫码（barcodeautomatic，仅旧 MES）。
      *
      * <p>要点：
      * <ul>
@@ -77,7 +77,7 @@ public class ReportGenerator {
      *       也是流上"聚合边界"问题的来源。造数时不造出这个特征，你就体会不到那个问题。</li>
      *   <li>{@code productionorderid} 存生产订单 ID，与 lot 通道语义和类型一致；
      *       两个通道都通过它关联 productionorder 表取得 productionorderno。</li>
-     *   <li>{@code modelencod} / {@code model} 对应 partcode / partname，
+     *   <li>{@code modelencode} / {@code model} 对应 partcode / partname，
      *       要与 part 维表里的值一致，否则对账时两个通道的物料口径对不上。</li>
      *   <li>{@code users} 存的是用户名字符串（不是 userid），与 lot 通道不同。</li>
      *   <li>扫码集中在总装线。</li>

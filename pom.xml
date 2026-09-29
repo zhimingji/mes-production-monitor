@@ -25,11 +25,6 @@
         <maven.compiler.source>8</maven.compiler.source>
         <maven.compiler.target>8</maven.compiler.target>
 
-        <!-- ============================================================
-             版本矩阵：改动前先看 技术设计文档.md 4.1 节
-             Flink CDC 2.4.x 只支持 Flink 1.13~1.17，与 1.18 不兼容。
-             flink-connector-kafka 自 1.17 起外置，不存在 1.18.1 版本号。
-             ============================================================ -->
         <flink.version>1.18.1</flink.version>
         <flink.cdc.version>3.2.1</flink.cdc.version>
         <flink.kafka.connector.version>3.0.2-1.18</flink.kafka.connector.version>
@@ -44,10 +39,13 @@
         <log4j.version>2.17.1</log4j.version>
         <junit.version>4.13.2</junit.version>
 
-        <!-- Flink 依赖的 scope，
-             默认 provided（集群上 Flink 自带，打进 jar 会冲突）。
+        <!-- Flink 依赖的 scope，默认 provided（集群上 Flink 自带，打进 jar 会冲突）
              本地 IDEA 运行时用 -Plocal 激活 profile 切成 compile。 -->
         <flink.scope>provided</flink.scope>
+
+        <!-- 各作业模块在自身 pom 的 <properties> 里覆盖此值，shade 插件用它生成 Main-Class。
+             根 pom 提供默认值只是为了消除未定义属性报错 -->
+        <job.main.class>com.mes.production.monitor.MainClass</job.main.class>
     </properties>
 
     <profiles>
@@ -106,7 +104,7 @@
                 <version>${flink.version}</version>
                 <scope>${flink.scope}</scope>
             </dependency>
-            <!-- RocksDB 状态后端：告警作业必需（见文档 6.4.1） -->
+            <!-- RocksDB 状态后端：告警作业必需 -->
             <dependency>
                 <groupId>org.apache.flink</groupId>
                 <artifactId>flink-statebackend-rocksdb</artifactId>
@@ -115,7 +113,7 @@
             </dependency>
 
             <!-- ==================== Flink Connectors ====================
-                 connector 打进业务 jar，不能是 provided。 -->
+                 connector 打进业务 jar，不能是 provided -->
             <dependency>
                 <groupId>org.apache.flink</groupId>
                 <artifactId>flink-connector-kafka</artifactId>
@@ -170,7 +168,7 @@
             </dependency>
 
             <!-- ==================== 日志 ====================
-                 Flink 集群自带 log4j2，这里全部 provided 防止 jar 冲突。 -->
+                 Flink 集群自带 log4j2，这里全部 provided 防止 jar 冲突 -->
             <dependency>
                 <groupId>org.slf4j</groupId>
                 <artifactId>slf4j-api</artifactId>
@@ -253,6 +251,11 @@
                                             <exclude>META-INF/*.SF</exclude>
                                             <exclude>META-INF/*.DSA</exclude>
                                             <exclude>META-INF/*.RSA</exclude>
+                                            <!-- kafka-clients（flink-connector-kafka 的传递依赖，非 relocated）与 Flink lib
+                                                 里的重复，导致 classloader 冲突：ByteArraySerializer is not an instance of
+                                                 Serializer。这里剥掉 fat jar 里的 org/apache/kafka/**；flink-sql-connector-mysql-cdc
+                                                 内置的 kafka 是 relocated 版本（shaded/ 下），不受影响、无需处理 -->
+                                            <exclude>org/apache/kafka/**</exclude>
                                         </excludes>
                                     </filter>
                                 </filters>

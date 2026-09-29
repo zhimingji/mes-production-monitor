@@ -8,7 +8,7 @@
 #   mes_old_wh  mes_new_wh
 #   mes_old_cq  mes_new_cq
 #
-# 差异：旧 MES 有 lot + it_barcodeautomatic 两套报工通道，新 MES 只有 lot（见文档 2.2）
+# 差异：旧 MES 有 lot + barcodeautomatic 两套报工通道，新 MES 只有 lot（见文档 2.2）
 # ==============================================================================
 set -euo pipefail
 
@@ -103,11 +103,11 @@ SQL
 # ------------------------------------------------------------------------------
 old_only_schema() {
 cat <<'SQL'
-CREATE TABLE IF NOT EXISTS it_barcodeautomatic (
+CREATE TABLE IF NOT EXISTS barcodeautomatic (
   barcode          VARCHAR(50)  NOT NULL COMMENT '条码；DWD 的 record_id 来源',
   lpnbarcode       VARCHAR(50)  NULL     COMMENT 'LPN 条码；原报表按它分组聚合',
   productionorderid BIGINT      NOT NULL COMMENT '生产订单 ID；与 lot 使用相同订单键',
-  modelencod       VARCHAR(50)  NULL     COMMENT '型号编码，对应 partcode',
+  modelencode      VARCHAR(50)  NULL     COMMENT '型号编码，对应 partcode',
   model            VARCHAR(100) NULL     COMMENT '型号，对应 partname',
   users            VARCHAR(50)  NULL     COMMENT '报工用户名（字符串，非 ID）',
   quantity         INT          NULL     COMMENT '数量；原报表按 LPN 分组 SUM',

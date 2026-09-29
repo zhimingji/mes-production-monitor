@@ -84,7 +84,7 @@ services:
     command: |
       "
       set -e
-      TOPICS='ods-mes-report:6 dwd-mes-report:6 mes-alert:3'
+      TOPICS='ods-mes-report:6 ods-mes-order:6 dwd-mes-report:6 mes-alert:3'
       for t in $$TOPICS; do
         name=$${t%%:*}
         parts=$${t##*:}

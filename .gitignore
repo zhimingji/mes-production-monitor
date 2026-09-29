@@ -32,3 +32,6 @@ local.properties
 .DS_Store
 Thumbs.db
 desktop.ini
+
+### Cursor ###
+.cursor/

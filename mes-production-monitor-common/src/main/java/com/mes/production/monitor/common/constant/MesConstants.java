@@ -3,7 +3,7 @@ package com.mes.production.monitor.common.constant;
 import java.time.ZoneId;
 
 /**
- * 全局业务常量。凡是「口径」相关的数字都集中在这里，不要散落在各作业里。
+ * 全局业务常量。凡是「口径」相关的数字都集中在这里，不要散落在各作业里
  */
 public final class MesConstants {
 
@@ -36,9 +36,10 @@ public final class MesConstants {
     public static final String DB_PREFIX_NEW = "mes_new_";
 
     // ==================== 源表名 ====================
+    // CDC 作业 CdcToKafkaJob 的 SQL DDL 复用这些常量，改源表名只需改这里一处
 
     public static final String TABLE_LOT = "lot";
-    public static final String TABLE_BARCODE = "it_barcodeautomatic";
+    public static final String TABLE_BARCODE = "barcodeautomatic";
     public static final String TABLE_PRODUCTION_ORDER = "productionorder";
     public static final String TABLE_PART = "part";
     public static final String TABLE_WORKCENTER = "workcenter";

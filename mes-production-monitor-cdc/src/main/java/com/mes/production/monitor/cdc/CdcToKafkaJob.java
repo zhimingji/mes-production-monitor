@@ -2,10 +2,8 @@ package com.mes.production.monitor.cdc;
 
 import com.mes.production.monitor.common.constant.MesConstants;
 import com.mes.production.monitor.common.constant.Topics;
+import com.mes.production.monitor.common.flink.FlinkEnvFactory;
 import com.mes.production.monitor.common.util.JobConfig;
-import org.apache.flink.api.common.restartstrategy.RestartStrategies;
-import org.apache.flink.api.common.time.Time;
-import org.apache.flink.streaming.api.CheckpointingMode;
 import org.apache.flink.streaming.api.environment.CheckpointConfig;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.apache.flink.table.api.bridge.java.StreamStatementSet;
@@ -51,32 +49,14 @@ public class CdcToKafkaJob {
                 conf.getString("kafka.ods.order.topic", Topics.ODS_MES_ORDER));
 
         // 获取执行环境
-        StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
+        StreamExecutionEnvironment env = FlinkEnvFactory.create(conf);
 
-        // 设置并行度
-        env.setParallelism(conf.getInt("job.parallelism", 1));
-
-        // 开启检查点, 默认周期为 1min
-        env.enableCheckpointing(conf.getLong("checkpoint.interval.ms", 60_000L));
-
+        // CDC 采集因 binlog 分区倾斜、barrier 对齐易背压，额外开启非对齐检查点（通用工厂默认对齐）
         CheckpointConfig checkpointConfig = env.getCheckpointConfig();
-        // 设置检查点存储路径
-        checkpointConfig.setCheckpointStorage(conf.getString("checkpoint.dir"));
-        // 设置检查点模式为精确一次
-        checkpointConfig.setCheckpointingMode(CheckpointingMode.EXACTLY_ONCE);
-        // 设置检查点超时时间,默认一分钟
-        checkpointConfig.setCheckpointTimeout(conf.getLong("checkpoint.timeout.ms", 60_000L));
-        // 取消作业时，checkpoint的数据保留在外部系统
-        checkpointConfig.setExternalizedCheckpointCleanup(CheckpointConfig.ExternalizedCheckpointCleanup.RETAIN_ON_CANCELLATION);
-        // 允许checkpoint连接失败的次数: 10次
-        checkpointConfig.setTolerableCheckpointFailureNumber(conf.getInt("checkpoint.failure.number.tolerable", 10));
         // 开启非对齐检查点
         checkpointConfig.enableUnalignedCheckpoints();
-        //如果大于0，一开始用 对齐检查点（Barrier对齐），对齐的时间超过这个参数，自动切换成 非对齐检查点（Barrier非对齐）
-        checkpointConfig.setAlignedCheckpointTimeout(Duration.ofSeconds(1));
-
-        // 指定从 CK 自动重启策略
-        env.setRestartStrategy(RestartStrategies.failureRateRestart(20, Time.days(1L), Time.minutes(1L)));
+        // 对齐时间超过 10s 自动切换为非对齐（Barrier 非对齐），否则先用对齐（Barrier 对齐）
+        checkpointConfig.setAlignedCheckpointTimeout(Duration.ofSeconds(10));
 
         // 创建表环境
         StreamTableEnvironment tableEnv = StreamTableEnvironment.create(env);
@@ -320,7 +300,7 @@ public class CdcToKafkaJob {
             + "  'properties.bootstrap.servers' = '"
             + conf.getString("kafka.bootstrap.servers") + "',\n"
             + "  'key.format' = 'json',\n"
-            + "  'key.fields' = 'company,datasource,record_id,outputtype',\n"
+            + "  'key.fields' = 'company;datasource;record_id;outputtype',\n"
             + "  'value.format' = 'debezium-json',\n"
             + "  'sink.delivery-guarantee' = 'exactly-once',\n"
             // transaction 超时须 <= broker 的 transaction.max.timeout.ms（默认 15min），且 > checkpoint 周期（60s）
@@ -352,7 +332,7 @@ public class CdcToKafkaJob {
                 + "  'topic' = '" + conf.getString("kafka.ods.order.topic", Topics.ODS_MES_ORDER) + "',\n"
                 + "  'properties.bootstrap.servers' = '" + conf.getString("kafka.bootstrap.servers") + "',\n"
                 + "  'key.format' = 'json',\n"
-                + "  'key.fields' = 'company,datasource,productionorderid',\n"
+                + "  'key.fields' = 'company;datasource;productionorderid',\n"
                 + "  'value.format' = 'debezium-json',\n"
                 + "  'sink.delivery-guarantee' = 'exactly-once',\n"
                 // transaction 超时须 <= broker 的 transaction.max.timeout.ms（默认 15min），且 > checkpoint 周期（60s）

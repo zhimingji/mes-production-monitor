@@ -133,3 +133,33 @@
 - 根因：同一次作业提交中两个 Kafka sink 算子使用了完全相同的 transactional.id，后启动的 producer fence 了先启动的 producer，导致 checkpoint 提交事务时失败。
 - 解决：将两个 INSERT 合并为 INSERT ... UNION ALL，或拆成两张 sink 表并设置不同的 sink.transactional-id-prefix
 - 面试可讲点： Flink Kafka exactly-once 的 transactional.id 通常由 sink.transactional-id-prefix + 子任务索引 生成，同一作业内多个 sink 共用相同 prefix 会导致事务 ID 冲突并触发 ProducerFencedException
+
+### 12. clickhouse-jdbc 写 CK 报 DateTimeParseException，被解析的值却是 record_id
+
+- 阶段：M3（DWD 作业写 ClickHouse）
+- 现象：DWD 作业在 checkpoint 1 时失败，`ck-dwd-sink` 算子写 `dwd_mes_report` 报错；重启后同样报错，只是报错里的值从 `'5'` 变成 `'1'`。
+- 报错原文：
+  ```
+  java.time.format.DateTimeParseException: Text '5' could not be parsed at index 0
+    at java.time.LocalDate.parse(...)
+    at com.clickhouse.data.value.ClickHouseStringValue.asDate(...)
+    at com.clickhouse.data.format.BinaryDataProcessor$DateSerDe.serialize(...)
+    at com.clickhouse.jdbc.internal.InputBasedPreparedStatement.addBatch(...)
+  ```
+- 排查过程：先按已知 issue #624 把 `setDate(java.sql.Date)` 改成 `setObject(LocalDate)`，编译通过、反编译 jar 也确认改进去了，但报错依旧，值只是从 `'5'` 变 `'1'`。回头盯报错值本身：`'5'`/`'1'` 是**单字符数字串，不可能是任何日期**；而灌数里 `record_id = CAST(lotid AS STRING)` = "1".."10"，恰好就是它。反编译 0.7.2 驱动确认：`Date` 列的值类型是 `ClickHouseDateValue`（`asDate()` 直接返回 LocalDate、不做字符串解析），报错栈里的 `ClickHouseStringValue` 说明驱动把 `shift_date`(`Date`) 的 `DateSerDe` 错套到了 `record_id`(`String`) 列上。
+- 根因：clickhouse-jdbc 0.7.2 的 v2 客户端（`InputBasedPreparedStatement`，当时 `jdbc:clickhouse:http://` 走的就是它）对这张宽表的列类型解析错位。
+- 解决：驱动 0.7.2 → 0.8.6。注意 0.8.6 里 `jdbc:clickhouse:http://` 已切到新客户端 `PreparedStatementImpl`（无此 bug），而 `jdbc:ch://` 仍映射到旧的 `InputBasedPreparedStatement`，所以三份 properties 统一用 `jdbc:clickhouse:http://`。
+- 面试可讲点：**「先看懂报错值到底是什么」比「套一个看似合理的修复」更重要**。第一反应 `setDate`→`setObject(LocalDate)` 是正确方向（官方推荐、编译通过、jar 里也验证了），但没解决——因为报错值 `"5"/"1"` 根本不是 `shift_date`，而是 `record_id`。单字符数字串只可能是 String 列（lotid），这条线索直接指向「列类型错位」，而不是「日期绑定写法」。验证驱动行为靠反编译 jar（`javap -c`），不要停在「应该没问题」的推测。
+
+### 13. clickhouse-jdbc 0.8.6 报 compress 参数非法
+
+- 阶段：M3
+- 报错原文：
+  ```
+  java.lang.IllegalArgumentException: Invalid non-boolean value for the key 'compress': '0'
+    at com.clickhouse.client.api.internal.MapUtils.getFlag(...)
+    at com.clickhouse.client.api.internal.HttpAPIClientHelper.addQueryParams(...)
+  ```
+- 根因：0.8.6 新客户端把 `compress` 当布尔值解析，旧 URL 里 `compress=0`（0.7.2 接受 0/1 整数）不再合法。
+- 解决：`compress=0` → `compress=false`；顺带把三份 properties 的 CK URL 统一成 `jdbc:clickhouse:http://hadoop1:8123/mes_production_monitor?compress=false`（见上一条，弃用 `jdbc:ch://`）。
+- 面试可讲点：依赖大版本升级后，配置里的「数字开关」类参数常会从 `0/1` 收紧成 `true/false`，升级后先 grep 一遍 URL/连接串里的这类参数，比等作业跑到一半才报错省一轮提交。

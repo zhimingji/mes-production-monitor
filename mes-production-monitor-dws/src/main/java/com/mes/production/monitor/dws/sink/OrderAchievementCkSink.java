@@ -5,7 +5,6 @@ import com.mes.production.monitor.common.sink.ClickHouseBatchSink;
 import com.mes.production.monitor.common.util.ShiftUtil;
 
 import java.math.BigDecimal;
-import java.sql.Date;
 import java.sql.PreparedStatement;
 import java.sql.SQLException;
 import java.sql.Timestamp;
@@ -37,7 +36,9 @@ public class OrderAchievementCkSink extends ClickHouseBatchSink<OrderAchievement
     @Override
     protected void bindRow(PreparedStatement ps, OrderAchievement a) throws SQLException {
         int i = 1;
-        ps.setDate(i++, Date.valueOf(ShiftUtil.fromEpochDay(a.shiftDate)));
+        // Date 列用 LocalDate 绑定：clickhouse-jdbc 0.7.2 的 setDate(java.sql.Date) 有序列化 bug
+        // （issue #624），会抛 DateTimeParseException。传 LocalDate 走原生日期分支，见 DwdReportCkSink。
+        ps.setObject(i++, ShiftUtil.fromEpochDay(a.shiftDate));
         ps.setString(i++, nvl(a.company));
         ps.setString(i++, nvl(a.productionOrder));
         ps.setLong(i++, a.productionOrderId);

@@ -5,13 +5,12 @@ import com.mes.production.monitor.common.sink.ClickHouseBatchSink;
 import com.mes.production.monitor.common.util.ShiftUtil;
 
 import java.math.BigDecimal;
-import java.sql.Date;
 import java.sql.PreparedStatement;
 import java.sql.SQLException;
 import java.sql.Timestamp;
 
 /**
- * DWD 明细表 ClickHouse Sink。
+ * DWD 明细表 ClickHouse Sink
  *
  * <p>攒批、checkpoint 强制 flush、metric 都在父类 {@link ClickHouseBatchSink} 里，
  * 这里只负责列绑定。
@@ -35,8 +34,8 @@ public class DwdReportCkSink extends ClickHouseBatchSink<DwdReportRecord> {
                 + "record_id, version, company, datasource, outputtype, "
                 + "productionorder, productionorderid, lpnbarcode, username, "
                 + "partcode, partname, linecode, linename, workcentertype, workshop, "
-                + "orderquantity, lotquantity, outputdatetime, shift_date"
-                + ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+                + "orderquantity, lotquantity, outputdatetime, shift_date, is_deleted"
+                + ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
     }
 
     @Override
@@ -60,7 +59,12 @@ public class DwdReportCkSink extends ClickHouseBatchSink<DwdReportRecord> {
         ps.setLong(i++, r.orderQuantity);
         ps.setBigDecimal(i++, r.lotQuantity == null ? BigDecimal.ZERO : r.lotQuantity);
         ps.setTimestamp(i++, new Timestamp(r.outputDateTime));
-        ps.setDate(i, Date.valueOf(ShiftUtil.fromEpochDay(r.shiftDate)));
+        // shift_date 是 Date 列，必须用 LocalDate 绑定：clickhouse-jdbc 0.7.2 的
+        // setDate(java.sql.Date) 有序列化 bug（issue #624），会把 java.sql.Date 序列化成
+        // 乱串再 LocalDate.parse，直接抛 DateTimeParseException（如 "Text '5' could not be parsed"）。
+        // 传 LocalDate 走 update(LocalDate) 分支，DateSerDe 拿到的是原生日期值，不做字符串解析。
+        ps.setObject(i++, ShiftUtil.fromEpochDay(r.shiftDate));
+        ps.setByte(i, (byte) (r.isDeleted ? 1 : 0));
     }
 
     private static String nvl(String s) {

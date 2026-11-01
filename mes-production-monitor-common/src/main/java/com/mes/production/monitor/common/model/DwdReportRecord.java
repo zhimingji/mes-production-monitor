@@ -16,8 +16,14 @@ public class DwdReportRecord implements Serializable {
     /** 业务唯一键：lotid 或 barcode。ClickHouse ReplacingMergeTree 的去重键 */
     public String recordId;
 
-    /** 版本号：CDC ts_ms。同 recordId 取最大值，实现"报工修正取最新" */
+    /** 版本号：CDC 操作时间戳（op_ts）。同 recordId 取最大值，实现"报工修正取最新" */
     public long version;
+
+    /**
+     * 物理删除墓碑：true 表示该 recordId 已被删除（debezium op=d），CK 侧落 {@code is_deleted=1}。
+     * <p>同 recordId + 更高 version 覆盖原行，查询侧过滤掉。见文档 6.1.1。
+     */
+    public boolean isDeleted;
 
     public String company;
     public String dataSource;

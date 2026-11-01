@@ -6,6 +6,8 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 
+import java.math.BigDecimal;
+
 /**
  * JSON 工具。ObjectMapper 线程安全，全局单例即可。
  */
@@ -68,5 +70,24 @@ public final class JsonUtil {
         }
         JsonNode v = node.get(field);
         return (v == null || v.isNull()) ? null : v.asInt();
+    }
+
+    /** 安全取 Decimal 字段，兼容数值型（1.5）与文本型（"1.5000"）两种序列化 */
+    public static BigDecimal asBigDecimal(JsonNode node, String field) {
+        if (node == null) {
+            return null;
+        }
+        JsonNode v = node.get(field);
+        if (v == null || v.isNull()) {
+            return null;
+        }
+        if (v.isNumber()) {
+            return v.decimalValue();
+        }
+        try {
+            return new BigDecimal(v.asText());
+        } catch (NumberFormatException e) {
+            return null;
+        }
     }
 }

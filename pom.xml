@@ -31,7 +31,7 @@
         <flink.jdbc.connector.version>3.1.2-1.18</flink.jdbc.connector.version>
         <scala.binary.version>2.12</scala.binary.version>
 
-        <clickhouse.jdbc.version>0.6.0</clickhouse.jdbc.version>
+        <clickhouse.jdbc.version>0.8.6</clickhouse.jdbc.version>
         <mysql.connector.version>8.0.33</mysql.connector.version>
         <hikaricp.version>4.0.3</hikaricp.version>
         <jackson.version>2.15.3</jackson.version>
@@ -124,6 +124,12 @@
                 <artifactId>flink-connector-jdbc</artifactId>
                 <version>${flink.jdbc.connector.version}</version>
             </dependency>
+            <!-- DeliveryGuarantee 所在包：flink-connector-kafka 把它标成 provided 不会传递，需显式声明 -->
+            <dependency>
+                <groupId>org.apache.flink</groupId>
+                <artifactId>flink-connector-base</artifactId>
+                <version>${flink.version}</version>
+            </dependency>
             <dependency>
                 <groupId>org.apache.flink</groupId>
                 <artifactId>flink-sql-connector-mysql-cdc</artifactId>
@@ -135,8 +141,8 @@
                 <groupId>com.clickhouse</groupId>
                 <artifactId>clickhouse-jdbc</artifactId>
                 <version>${clickhouse.jdbc.version}</version>
-                <!-- 必须带 all 分类器，否则缺一堆传递依赖 -->
-                <classifier>all</classifier>
+                <!-- shaded-all 阴影包：自带全部依赖，避免与 Flink/Hadoop 的 httpclient 等冲突 -->
+                <classifier>shaded-all</classifier>
                 <exclusions>
                     <exclusion>
                         <groupId>*</groupId>

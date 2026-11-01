@@ -6,7 +6,7 @@ import java.io.Serializable;
  * 维表 POJO 集合。数据量小（&lt; 万级），用 Broadcast State + open() 里 JDBC bootstrap 兜底，
  * 见文档 6.2 / 6.2.1。
  *
- * <p>放在一个文件里是刻意的：这些类都只是数据容器，分散成 5 个文件反而不利于对照 schema。
+ * <p>放在一个文件里是刻意的：这些类都只是数据容器，分散成 5 个文件反而不利于对照 schema
  */
 public final class DimTables {
 

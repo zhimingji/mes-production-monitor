@@ -18,6 +18,9 @@ public final class MetricNames {
     /** 被业务规则过滤掉的记录（qty <= 0、订单号 FG% 开头） */
     public static final String FILTERED_RECORD_COUNT = "filtered_record_count";
 
+    /** 报工物理删除（debezium op=d）条数。落 is_deleted 墓碑前先计数，避免静默丢失，见文档 6.1.1 */
+    public static final String DELETED_RECORD_COUNT = "deleted_record_count";
+
     /**
      * 维表 join 不上的记录数。建议按维表分标签：order / part / workcenter / worksite / user。
      * <p>维度 miss 是典型的静默失败：条数一条不少，只是维度字段全空。

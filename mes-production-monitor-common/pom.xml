@@ -30,7 +30,7 @@
         <dependency>
             <groupId>com.clickhouse</groupId>
             <artifactId>clickhouse-jdbc</artifactId>
-            <classifier>all</classifier>
+            <classifier>shaded-all</classifier>
         </dependency>
         <dependency>
             <groupId>com.mysql</groupId>

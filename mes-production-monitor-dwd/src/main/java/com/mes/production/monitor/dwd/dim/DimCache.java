@@ -7,10 +7,10 @@ import java.util.HashMap;
 import java.util.Map;
 
 /**
- * 维表内存缓存。按源库名分组（10 个库各有一套维表，id 只在库内唯一，不能混着放）。
+ * 维表内存缓存：按源库名分组（10 个库各有一套维表，id 只在库内唯一，不能混着放）
  *
- * <p>数据量：每基地约 300 订单 + 50 产线 + 若干物料/用户，10 库合计万级以内，
- * 完全放得进内存，这也是选 Broadcast State 而不是 Lookup Join 的前提。
+ * <p>这里只放「小维表」：订单/产线/车间/用户，10 库合计万级以内，适合广播。
+ * 物料（part）是 20 万/基地的大维表，不进广播态，改走 {@link PartLookup} 按需查询 + 有界缓存。
  */
 public class DimCache implements Serializable {
 
@@ -18,8 +18,6 @@ public class DimCache implements Serializable {
 
     /** dbName -> (productionorderid -> 订单) */
     public Map<String, Map<Long, DimTables.ProductionOrder>> ordersById = new HashMap<>();
-    /** dbName -> (partid -> 物料) */
-    public Map<String, Map<Long, DimTables.Part>> parts = new HashMap<>();
     /** dbName -> (workcenterid -> 产线) */
     public Map<String, Map<Long, DimTables.WorkCenter>> workCenters = new HashMap<>();
     /** dbName -> (worksiteid -> 车间) */
@@ -35,11 +33,6 @@ public class DimCache implements Serializable {
 
     public DimTables.ProductionOrder order(String db, Long id) {
         Map<Long, DimTables.ProductionOrder> m = ordersById.get(db);
-        return (m == null || id == null) ? null : m.get(id);
-    }
-
-    public DimTables.Part part(String db, Long id) {
-        Map<Long, DimTables.Part> m = parts.get(db);
         return (m == null || id == null) ? null : m.get(id);
     }
 
@@ -62,7 +55,6 @@ public class DimCache implements Serializable {
     public String summary() {
         return "DimCache{dbs=" + ordersById.size()
                 + ", orders=" + count(ordersById)
-                + ", parts=" + count(parts)
                 + ", workCenters=" + count(workCenters)
                 + ", workSites=" + count(workSites)
                 + ", users=" + count(users)

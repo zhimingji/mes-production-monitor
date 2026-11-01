@@ -25,7 +25,7 @@ public class OdsReportRecord implements Serializable {
      */
     public String op;
 
-    /** binlog 事件时间戳（Debezium ts_ms），用作 ClickHouse ReplacingMergeTree 的 version */
+    /** binlog 操作时间戳（CDC opl_ts 元数据，即 Kafka 消息里的 op_ts），用作 ClickHouse ReplacingMergeTree 的 version；全量 snapshot 阶段为 0 */
     public long tsMs;
 
     /** 源库名，如 mes_old_zh。company / datasource 由它解析 */
@@ -60,6 +60,7 @@ public class OdsReportRecord implements Serializable {
 
     public Long lotId;
     public String lotNo;
+    public Long workCenterId;
     public BigDecimal finishedQuantity;
     /** 报工时间（事件时间），epoch millis */
     public Long createdDate;

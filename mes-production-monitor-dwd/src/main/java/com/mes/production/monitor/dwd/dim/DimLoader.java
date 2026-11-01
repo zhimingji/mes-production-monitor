@@ -15,14 +15,16 @@ import java.util.HashMap;
 import java.util.List;
 
 /**
- * 维表 JDBC 全量加载。
+ * 维表 JDBC 全量加载
  *
  * <p><b>为什么需要它</b>：Broadcast State 有初始化竞态——广播流还没到，主数据流已经进来了，
  * 此时读广播状态是空的，join 出来维度全是 null。更麻烦的是数据量小时可能碰巧不出现，
- * 一放量或一重启就出现，容易误判成 join 逻辑写错。
+ * 一放量或一重启就出现，容易误判成 join 逻辑写错
  *
- * <p>所以算子 {@code open()} 里先用本类做一次全量 bootstrap 兜底，广播流只负责后续增量刷新。
- * 见文档 6.2.1。
+ * <p>所以算子 {@code open()} 里先用本类做一次全量 bootstrap 兜底，广播流只负责后续增量刷新
+ *
+ * <p><b>两类加载</b>：{@link #loadAll} 含订单（bootstrap 用）；{@link #loadStatic} 不含订单
+ * （定时刷新用）——订单维会 UPDATE，由 {@code ods-mes-order} 的 CDC 增量广播维护，见文档 6.2.4
  */
 public final class DimLoader {
 
@@ -46,17 +48,31 @@ public final class DimLoader {
     }
 
     /**
-     * 加载全部 10 个库的维表。
+     * 全量加载：3 张静态维表 + 订单。用于 {@code open()} 里的 bootstrap 兜底，
+     * 保证第一条报工到达时本地缓存一定就绪（文档 6.2.1）。
+     * 物料（part）不在这里，见 {@link PartLookup}。
      *
-     * @param jdbcUrlTemplate 形如 {@code jdbc:mysql://localhost:3306/%s?useSSL=false&serverTimezone=Asia/Shanghai}，
+     * @param jdbcUrlTemplate 形如 {@code jdbc:mysql://hadoop1:3306/%s?useSSL=false&serverTimezone=Asia/Shanghai}，
      *                        {@code %s} 会被库名替换
      */
     public static DimCache loadAll(String jdbcUrlTemplate, String username, String password) {
+        return load(jdbcUrlTemplate, username, password, true);
+    }
+
+    /**
+     * 只加载 3 张静态维表（不含订单、不含 part）。用于 {@link DimRefreshSource} 的定时全量刷新：
+     * 订单维不参与定时刷，由 {@code ods-mes-order} 的 CDC 增量广播维护，见文档 6.2.4。
+     */
+    public static DimCache loadStatic(String jdbcUrlTemplate, String username, String password) {
+        return load(jdbcUrlTemplate, username, password, false);
+    }
+
+    private static DimCache load(String jdbcUrlTemplate, String username, String password, boolean withOrders) {
         DimCache cache = new DimCache();
         for (String db : allDatabases()) {
             String url = String.format(jdbcUrlTemplate, db);
             try (Connection conn = DriverManager.getConnection(url, username, password)) {
-                loadOneDatabase(conn, db, cache);
+                loadOneDatabase(conn, db, cache, withOrders);
             } catch (SQLException e) {
                 // 单库失败不应让整个作业起不来，但必须显式告警：
                 // 少一个库的维表 = 该基地全部数据维度为空，会体现在 dim_miss_count 上
@@ -64,43 +80,35 @@ public final class DimLoader {
             }
         }
         cache.loadedAt = System.currentTimeMillis();
-        LOG.info("维表加载完成: {}", cache.summary());
+        LOG.info("维表加载完成(含订单={}): {}", withOrders, cache.summary());
         return cache;
     }
 
-    private static void loadOneDatabase(Connection conn, String db, DimCache cache) throws SQLException {
-        cache.ordersById.put(db, new HashMap<>());
-        cache.parts.put(db, new HashMap<>());
+    private static void loadOneDatabase(Connection conn, String db, DimCache cache, boolean withOrders) throws SQLException {
+        if (withOrders) {
+            cache.ordersById.put(db, new HashMap<>());
+        }
         cache.workCenters.put(db, new HashMap<>());
         cache.workSites.put(db, new HashMap<>());
         cache.users.put(db, new HashMap<>());
 
         try (Statement st = conn.createStatement()) {
-            // ---------- productionorder ----------
-            try (ResultSet rs = st.executeQuery(
-                    "SELECT productionorderid, productionorderno, orderquantity, worksiteid, partid, "
-                            + "createddate, duedate FROM productionorder")) {
-                while (rs.next()) {
-                    DimTables.ProductionOrder o = new DimTables.ProductionOrder();
-                    o.productionOrderId = rs.getLong("productionorderid");
-                    o.productionOrderNo = rs.getString("productionorderno");
-                    o.orderQuantity = rs.getLong("orderquantity");
-                    o.worksiteId = rs.getLong("worksiteid");
-                    o.partId = rs.getLong("partid");
-                    o.createdDate = toMillis(rs.getTimestamp("createddate"));
-                    o.dueDate = toMillis(rs.getTimestamp("duedate"));
-                    cache.ordersById.get(db).put(o.productionOrderId, o);
-                }
-            }
-
-            // ---------- part ----------
-            try (ResultSet rs = st.executeQuery("SELECT partid, partcode, partname FROM part")) {
-                while (rs.next()) {
-                    DimTables.Part p = new DimTables.Part();
-                    p.partId = rs.getLong("partid");
-                    p.partCode = rs.getString("partcode");
-                    p.partName = rs.getString("partname");
-                    cache.parts.get(db).put(p.partId, p);
+            // ---------- productionorder（仅 bootstrap 全量时加载，定时刷新不碰，见 loadStatic） ----------
+            if (withOrders) {
+                try (ResultSet rs = st.executeQuery(
+                        "SELECT productionorderid, productionorderno, orderquantity, worksiteid, partid, "
+                                + "createddate, duedate FROM productionorder")) {
+                    while (rs.next()) {
+                        DimTables.ProductionOrder o = new DimTables.ProductionOrder();
+                        o.productionOrderId = rs.getLong("productionorderid");
+                        o.productionOrderNo = rs.getString("productionorderno");
+                        o.orderQuantity = rs.getLong("orderquantity");
+                        o.worksiteId = rs.getLong("worksiteid");
+                        o.partId = rs.getLong("partid");
+                        o.createdDate = toMillis(rs.getTimestamp("createddate"));
+                        o.dueDate = toMillis(rs.getTimestamp("duedate"));
+                        cache.ordersById.get(db).put(o.productionOrderId, o);
+                    }
                 }
             }
 

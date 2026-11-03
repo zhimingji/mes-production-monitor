@@ -27,9 +27,6 @@ public class MinuteMetric implements Serializable {
     /** 报工笔数 */
     public long recordCnt;
 
-    /** 窗口输出时间戳，作业重启重算窗口时靠它幂等覆盖 */
-    public long version;
-
     public MinuteMetric() {
     }
 }

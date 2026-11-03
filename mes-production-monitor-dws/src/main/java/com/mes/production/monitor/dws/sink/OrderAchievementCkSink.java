@@ -28,9 +28,9 @@ public class OrderAchievementCkSink extends ClickHouseBatchSink<OrderAchievement
     @Override
     protected String insertSql() {
         return "INSERT INTO dws_order_achievement ("
-                + "shift_date, company, productionorder, productionorderid, workshop, linecode, partcode, "
+                + "shift_date, company, datasource, productionorder, productionorderid, workshop, linecode, partcode, "
                 + "order_quantity, report_quantity, achieve_rate, plan_progress, last_report_time, version"
-                + ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+                + ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
     }
 
     @Override
@@ -40,6 +40,7 @@ public class OrderAchievementCkSink extends ClickHouseBatchSink<OrderAchievement
         // （issue #624），会抛 DateTimeParseException。传 LocalDate 走原生日期分支，见 DwdReportCkSink。
         ps.setObject(i++, ShiftUtil.fromEpochDay(a.shiftDate));
         ps.setString(i++, nvl(a.company));
+        ps.setString(i++, nvl(a.dataSource));
         ps.setString(i++, nvl(a.productionOrder));
         ps.setLong(i++, a.productionOrderId);
         ps.setString(i++, nvl(a.workshop));

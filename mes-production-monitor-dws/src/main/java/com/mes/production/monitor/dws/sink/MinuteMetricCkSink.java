@@ -22,8 +22,8 @@ public class MinuteMetricCkSink extends ClickHouseBatchSink<MinuteMetric> {
     protected String insertSql() {
         return "INSERT INTO dws_report_1min ("
                 + "ts_minute, company, workshop, linecode, linename, partcode, "
-                + "output_quantity, record_cnt, version"
-                + ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)";
+                + "output_quantity, record_cnt"
+                + ") VALUES (?, ?, ?, ?, ?, ?, ?, ?)";
     }
 
     @Override
@@ -37,7 +37,6 @@ public class MinuteMetricCkSink extends ClickHouseBatchSink<MinuteMetric> {
         ps.setString(i++, nvl(m.partCode));
         ps.setBigDecimal(i++, m.outputQuantity == null ? BigDecimal.ZERO : m.outputQuantity);
         ps.setLong(i++, m.recordCnt);
-        ps.setLong(i, m.version);
     }
 
     private static String nvl(String s) {

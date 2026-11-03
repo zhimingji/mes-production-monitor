@@ -22,6 +22,7 @@ public class OrderAchievement implements Serializable {
     public int shiftDate;
 
     public String company;
+    public String dataSource;
     public String productionOrder;
     public long productionOrderId;
     public String workshop;
@@ -39,6 +40,10 @@ public class OrderAchievement implements Serializable {
 
     /** 最后一次报工时间，epoch millis */
     public long lastReportTime;
+
+    /** 订单创建时间 / 交期（epoch millis）。非 CK 列，仅用于计划进度计算 */
+    public long orderCreatedDate;
+    public long orderDueDate;
 
     public long version;
 

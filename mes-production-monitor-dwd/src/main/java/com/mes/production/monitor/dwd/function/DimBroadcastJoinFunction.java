@@ -159,11 +159,15 @@ public class DimBroadcastJoinFunction
         DimTables.ProductionOrder order = localCache.order(value.databaseName, value.productionOrderId);
         String productionOrderNo = null;
         long orderQuantity = 0L;
+        long orderCreatedDate = 0L;
+        long orderDueDate = 0L;
         if (order == null) {
             orderMissCount.inc();
         } else {
             productionOrderNo = order.productionOrderNo;
             orderQuantity = order.orderQuantity;
+            orderCreatedDate = order.createdDate;
+            orderDueDate = order.dueDate;
         }
 
         // 4) 口径过滤二：订单号 NOT LIKE 'FG%'（沿用原报表，文档 2.4）
@@ -249,6 +253,8 @@ public class DimBroadcastJoinFunction
         r.workCenterType = workCenterType;
         r.workshop = workshop;
         r.orderQuantity = orderQuantity;
+        r.orderCreatedDate = orderCreatedDate;
+        r.orderDueDate = orderDueDate;
         r.lotQuantity = lotQuantity;
         r.outputDateTime = eventTime;
         r.shiftDate = ShiftUtil.shiftDateEpochDay(eventTime);

@@ -45,6 +45,10 @@ public class DwdReportRecord implements Serializable {
 
     /** 订单计划量。订单级属性，维度聚合时不能直接 SUM，见文档 7.2 */
     public long orderQuantity;
+    /** 订单创建时间（订单静态属性，用于 DWS 计划进度爬坡），epoch millis */
+    public long orderCreatedDate;
+    /** 订单交期（订单静态属性，用于 DWS 计划进度爬坡），epoch millis */
+    public long orderDueDate;
     /** 报工量（实际） */
     public BigDecimal lotQuantity;
 
@@ -54,6 +58,14 @@ public class DwdReportRecord implements Serializable {
     public int shiftDate;
 
     public DwdReportRecord() {
+    }
+
+    /** 逻辑唯一键：record_id 仅库内唯一，跨库/跨通道靠 company+datasource+outputtype 消歧（DWS 去重用） */
+    public String logicalKey() {
+        return (company == null ? "" : company) + '|'
+                + (dataSource == null ? "" : dataSource) + '|'
+                + (outputType == null ? "" : outputType) + '|'
+                + (recordId == null ? "" : recordId);
     }
 
     @Override

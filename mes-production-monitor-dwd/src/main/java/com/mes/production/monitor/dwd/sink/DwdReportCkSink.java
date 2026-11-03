@@ -34,8 +34,8 @@ public class DwdReportCkSink extends ClickHouseBatchSink<DwdReportRecord> {
                 + "record_id, version, company, datasource, outputtype, "
                 + "productionorder, productionorderid, lpnbarcode, username, "
                 + "partcode, partname, linecode, linename, workcentertype, workshop, "
-                + "orderquantity, lotquantity, outputdatetime, shift_date, is_deleted"
-                + ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+                + "orderquantity, ordercreateddate, orderduedate, lotquantity, outputdatetime, shift_date, is_deleted"
+                + ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
     }
 
     @Override
@@ -57,6 +57,8 @@ public class DwdReportCkSink extends ClickHouseBatchSink<DwdReportRecord> {
         ps.setString(i++, nvl(r.workCenterType));
         ps.setString(i++, nvl(r.workshop));
         ps.setLong(i++, r.orderQuantity);
+        ps.setTimestamp(i++, new Timestamp(r.orderCreatedDate));
+        ps.setTimestamp(i++, new Timestamp(r.orderDueDate));
         ps.setBigDecimal(i++, r.lotQuantity == null ? BigDecimal.ZERO : r.lotQuantity);
         ps.setTimestamp(i++, new Timestamp(r.outputDateTime));
         // shift_date 是 Date 列，必须用 LocalDate 绑定：clickhouse-jdbc 0.7.2 的

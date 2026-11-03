@@ -27,18 +27,20 @@ CREATE TABLE IF NOT EXISTS mes_production_monitor.dwd_mes_report
     version           UInt64                    COMMENT 'CDC 操作时间戳 op_ts，同键取最大',
     company           LowCardinality(String)    COMMENT '基地',
     datasource        LowCardinality(String)    COMMENT 'OLD_MES / NEW_MES',
-    outputtype        LowCardinality(String)    COMMENT 'MES手动报工 / 过线扫码',
+    outputtype        LowCardinality(String)    COMMENT '手动报工 / 过线扫码',
     productionorder   String                    COMMENT '订单编号（两通道对齐到这同一列，非去重键）',
     productionorderid Int64                     COMMENT '订单主键，DWS 达成率先按它聚合',
     lpnbarcode        String                    COMMENT '批次/LPN 条码',
-    username          String,
-    partcode          String,
-    partname          String,
+    username          String                    COMMENT '报工人',
+    partcode          String                    COMMENT '物料编码',
+    partname          String                    COMMENT '物料名称',
     linecode          LowCardinality(String)    COMMENT '产线编码',
-    linename          String,
-    workcentertype    LowCardinality(String),
+    linename          String                    COMMENT '产线名称',
+    workcentertype    LowCardinality(String)    COMMENT '产线类型',
     workshop          LowCardinality(String)    COMMENT '车间/分厂',
     orderquantity     Int64                     COMMENT '订单计划量（订单级属性，勿直接 SUM）',
+    ordercreateddate  DateTime                  COMMENT '订单创建时间（计划进度爬坡起点）',
+    orderduedate      DateTime                  COMMENT '订单交期（计划进度爬坡终点）',
     lotquantity       Decimal(38, 4)            COMMENT '报工量',
     outputdatetime    DateTime                  COMMENT '报工时间（事件时间）',
     shift_date        Date                      COMMENT '班次日，08:30 日界换算',
@@ -65,7 +67,7 @@ WHERE is_deleted = 0;
 CREATE TABLE IF NOT EXISTS mes_production_monitor.dwd_mes_report_deleted_audit
 (
     record_id   String                     COMMENT '被删报工的业务唯一键',
-    company     LowCardinality(String),
+    company     LowCardinality(String)    COMMENT '基地',
     table_name  String                     COMMENT 'lot / barcodeautomatic',
     ts_ms       UInt64                     COMMENT '删除事件 ts_ms',
     payload     String                     COMMENT '完整 before JSON',
@@ -81,16 +83,15 @@ CREATE TABLE IF NOT EXISTS mes_production_monitor.dwd_mes_report_deleted_audit
 CREATE TABLE IF NOT EXISTS mes_production_monitor.dws_report_1min
 (
     ts_minute       DateTime                 COMMENT '窗口起始（分钟对齐）',
-    company         LowCardinality(String),
-    workshop        LowCardinality(String),
-    linecode        LowCardinality(String),
-    linename        String,
-    partcode        String,
-    output_quantity Decimal(38, 4)           COMMENT 'SUM(lotquantity)',
-    record_cnt      UInt64                   COMMENT '报工笔数',
-    version         UInt64                   COMMENT '窗口输出时间戳，重算时幂等覆盖'
+    company         LowCardinality(String)    COMMENT '基地',
+    workshop        LowCardinality(String)    COMMENT '车间/分厂',
+    linecode        LowCardinality(String)    COMMENT '产线编码',
+    linename        String                    COMMENT '产线名称',
+    partcode        String                    COMMENT '物料编码',
+    output_quantity Decimal(38, 4)           COMMENT 'SUM(lotquantity)，带符号增量累加',
+    record_cnt      Int64                    COMMENT '报工笔数，带符号增量累加（修正/删除中间态可为负，merge 后非负）'
 )
-    ENGINE = ReplacingMergeTree(version)
+    ENGINE = SummingMergeTree((output_quantity, record_cnt))
         PARTITION BY toYYYYMMDD(ts_minute)
         ORDER BY (company, ts_minute, workshop, linecode, partcode);
 
@@ -112,23 +113,24 @@ FROM mes_production_monitor.dws_report_1min FINAL;
 -- -----------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS mes_production_monitor.dws_order_achievement
 (
-    shift_date        Date,
-    company           LowCardinality(String),
-    productionorder   String,
-    productionorderid Int64,
-    workshop          LowCardinality(String),
-    linecode          LowCardinality(String),
-    partcode          String,
+    shift_date        Date                    COMMENT '班次日（08:30 日界）',
+    company           LowCardinality(String) COMMENT '基地',
+    datasource        LowCardinality(String) COMMENT 'OLD_MES / NEW_MES：订单号在 old/new 库同名，靠它消歧',
+    productionorder   String                  COMMENT '订单编号',
+    productionorderid Int64                   COMMENT '订单主键',
+    workshop          LowCardinality(String) COMMENT '车间/分厂',
+    linecode          LowCardinality(String) COMMENT '产线编码',
+    partcode          String                  COMMENT '物料编码',
     order_quantity    Int64                  COMMENT '订单计划量',
     report_quantity   Decimal(38, 4)         COMMENT '该订单累计报工量',
     achieve_rate      Decimal(10, 4)         COMMENT 'report / order',
     plan_progress     Decimal(10, 4)         COMMENT '计划进度（线性爬坡）',
-    last_report_time  DateTime,
-    version           UInt64
+    last_report_time  DateTime               COMMENT '该订单最后一次报工时间',
+    version           UInt64                 COMMENT '版本号（快照输出时间戳，幂等覆盖）'
 )
     ENGINE = ReplacingMergeTree(version)
         PARTITION BY shift_date
-        ORDER BY (company, shift_date, productionorder);
+        ORDER BY (company, datasource, shift_date, productionorder);
 
 CREATE VIEW IF NOT EXISTS mes_production_monitor.v_dws_order_achievement AS
 SELECT *
@@ -144,15 +146,15 @@ CREATE TABLE IF NOT EXISTS mes_production_monitor.ads_alert
     alert_id        String                   COMMENT '告警唯一标识，升级时不变',
     alert_type      LowCardinality(String)   COMMENT 'OVER_REPORT / LAG / MISSING_REPORT',
     level           LowCardinality(String)   COMMENT 'P3 / P2 / P1',
-    company         LowCardinality(String),
-    linecode        LowCardinality(String),
-    productionorder String,
-    order_quantity  Int64,
-    report_quantity Decimal(38, 4),
-    achieve_rate    Decimal(10, 4),
+    company         LowCardinality(String)   COMMENT '基地',
+    linecode        LowCardinality(String)   COMMENT '产线编码',
+    productionorder String                   COMMENT '订单编号',
+    order_quantity  Int64                    COMMENT '订单计划量',
+    report_quantity Decimal(38, 4)           COMMENT '累计报工量',
+    achieve_rate    Decimal(10, 4)           COMMENT '达成率',
     alert_time      DateTime                 COMMENT '首次触发时间',
     recover_time    Nullable(DateTime)       COMMENT 'NULL = 未恢复；OVER_REPORT 不会自动恢复',
-    version         UInt64
+    version         UInt64                   COMMENT '版本号（升级时更新，ReplacingMergeTree 覆盖）'
 )
     ENGINE = ReplacingMergeTree(version)
         PARTITION BY toYYYYMMDD(alert_time)

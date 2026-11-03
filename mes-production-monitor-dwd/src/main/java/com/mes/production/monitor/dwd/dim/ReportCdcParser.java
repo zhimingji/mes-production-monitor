@@ -163,9 +163,10 @@ public class ReportCdcParser extends RichFlatMapFunction<String, OdsReportRecord
         return null;
     }
 
-    private static long parseMillis(String s) {
+    /** 返回 null 表示源值为空/解析失败——eventTime() 靠 null 区分通道，不能用 0 顶替 */
+    private static Long parseMillis(String s) {
         if (s == null || s.isEmpty()) {
-            return 0L;
+            return null;
         }
         try {
             if (s.contains("T")) {
@@ -173,7 +174,7 @@ public class ReportCdcParser extends RichFlatMapFunction<String, OdsReportRecord
             }
             return LocalDateTime.parse(s, TIMESTAMP).atZone(MesConstants.BIZ_ZONE).toInstant().toEpochMilli();
         } catch (Exception e) {
-            return 0L;
+            return null;
         }
     }
 

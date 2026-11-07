@@ -102,13 +102,15 @@ public class DwsMetricsJob {
                 .uid("minute-delta-watermark");
 
         long windowMinutes = conf.getLong("metric.window.minutes", 1L);
-        int saltBuckets = conf.getInt("agg.salt.buckets", 1);
+        int saltBuckets = conf.getInt("agg.salt.buckets", 1);// 默认 1 = 关闭两阶段
 
         SingleOutputStreamOperator<MinuteMetric> minuteStream;
         DataStream<MinuteDelta> lateDeltaStream;
         if (saltBuckets > 1) {
             // 两阶段聚合（数据倾斜，文档 11.1）：一阶段 key 加随机盐预聚合，二阶段去盐二次聚合。
             // 盐随机即可——ChangelogNormalizer 已按 version 去重，checkpoint 一致回滚保证不重不漏。
+            // new MinuteDeltaAggregate(): 增量累加
+            // new MinuteMetricWindow(): 窗口触发时收尾
             SingleOutputStreamOperator<MinuteMetric> preAgg = deltaStream
                     .keyBy(d -> saltedMinuteKey(d, saltBuckets))
                     .window(TumblingEventTimeWindows.of(Time.minutes(windowMinutes)))
@@ -192,7 +194,7 @@ public class DwsMetricsJob {
         env.execute("mes-production-monitor-dws-metrics");
     }
 
-    /** 分钟增量聚合键：company|workshop|linecode|partcode */
+    /** 分钟增量聚合键：company|workshop|linecode|partcode。lineName 不进 key（lineCode 的函数依赖，随输出携带即可） */
     private static String minuteDeltaKey(MinuteDelta d) {
         return nvl(d.company) + '|' + nvl(d.workshop) + '|' + nvl(d.lineCode) + '|' + nvl(d.partCode);
     }
@@ -286,7 +288,19 @@ public class DwsMetricsJob {
 
     // ==================== 分钟聚合（带符号增量累加） ====================
 
-    /** 累加器：SUM(quantity) + SUM(count)，维度在 key 内恒定取第一条 */
+    /**
+     * 分钟聚合累加器：SUM(quantity) + SUM(count)。维度字段在 key 内恒定，取第一条即可。
+     *
+     * <p><b>维度为什么选这 5 个</b>：company / workshop / lineCode / partCode 是分钟产量的
+     * 报告粒度（基地/车间/产线/物料），一一对应 {@code dws_report_1min} 的维度列。lineName 是
+     * lineCode 的函数依赖属性（同 lineCode 必同 lineName，来自 workcenter 维表），因此<b>不进聚合
+     * key</b>——进了反而会把产线改名误拆成两条——但作为携带属性随结果输出，供下游 linename 列
+     * 与看板直接展示、免去 join。
+     *
+     * <p><b>刻意排除</b>：productionOrder / userName 属于订单达成率链路或更细粒度，不混入分钟产量；
+     * dataSource / outputType / recordId 是身份/去重键（见 logicalKey），报告口径要跨新旧库、跨
+     * 手工/扫码通道合并求和，故也不进报告 key。
+     */
     public static class MinuteAccumulator {
         public BigDecimal sum = BigDecimal.ZERO;
         public long count = 0;
@@ -294,6 +308,7 @@ public class DwsMetricsJob {
         public String company;
         public String workshop;
         public String lineCode;
+        /** lineCode 的函数依赖属性：不进 key，仅随输出携带（对应 dws_report_1min.linename） */
         public String lineName;
         public String partCode;
     }
@@ -322,16 +337,25 @@ public class DwsMetricsJob {
             return acc;
         }
 
+        /**
+         * 合并两个部分累加器（{@link AggregateFunction#merge}）。只有 session 这类可合并窗口
+         * （{@code MergingWindowAssigner}）才会触发；本作业用 {@code TumblingEventTimeWindows}
+         * （滚动窗口，不合并），运行时不会调到，写对是预防以后改成 session 的「保险」。
+         *
+         * <p>initialized 区分「空累加器」（createAccumulator 产出、还没 add，维度为 null）与「有数据
+         * 的累加器」：空的一侧直接丢弃、返回带有效维度的另一侧，避免合出数值对但维度为 null 的脏累加器；
+         * 两侧都有数据时才把 sum/count 相加。
+         */
         @Override
         public MinuteAccumulator merge(MinuteAccumulator a, MinuteAccumulator b) {
             if (!a.initialized) {
-                return b;
+                return b;   // a 是空壳，直接返回 b（b 才带有效维度）
             }
             if (!b.initialized) {
-                return a;
+                return a;   // b 是空壳，直接返回 a
             }
-            a.sum = a.sum.add(b.sum);
-            a.count += b.count;
+            a.sum = a.sum.add(b.sum); // BigDecimal 不可变：add 返回新对象，必须重新赋值接收，否则等于没加
+            a.count += b.count;       // count 是 long，直接 += 即可
             return a;
         }
 
@@ -374,16 +398,25 @@ public class DwsMetricsJob {
             return acc;
         }
 
+        /**
+         * 合并两个部分累加器（{@link AggregateFunction#merge}）。只有 session 这类可合并窗口
+         * （{@code MergingWindowAssigner}）才会触发；本作业用 {@code TumblingEventTimeWindows}
+         * （滚动窗口，不合并），运行时不会调到，写对是预防以后改成 session 的「保险」。
+         *
+         * <p>initialized 区分「空累加器」（createAccumulator 产出、还没 add，维度为 null）与「有数据
+         * 的累加器」：空的一侧直接丢弃、返回带有效维度的另一侧，避免合出数值对但维度为 null 的脏累加器；
+         * 两侧都有数据时才把 sum/count 相加。
+         */
         @Override
         public MinuteAccumulator merge(MinuteAccumulator a, MinuteAccumulator b) {
             if (!a.initialized) {
-                return b;
+                return b;   // a 是空壳，直接返回 b（b 才带有效维度）
             }
             if (!b.initialized) {
-                return a;
+                return a;   // b 是空壳，直接返回 a
             }
-            a.sum = a.sum.add(b.sum);
-            a.count += b.count;
+            a.sum = a.sum.add(b.sum); // BigDecimal 不可变：add 返回新对象，必须重新赋值接收，否则等于没加
+            a.count += b.count;       // count 是 long，直接 += 即可
             return a;
         }
 

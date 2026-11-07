@@ -49,6 +49,7 @@ public class ChangelogNormalizer
         }
 
         // 回撤上一次累计的量（若之前累计过）
+        // prevQty.negate(): 上一次累计的量取反 → -prevQty
         BigDecimal prevQty = lastQuantity.value();
         if (prevQty != null && prevQty.signum() != 0) {
             emit(r, prevQty.negate(), -1L, out);

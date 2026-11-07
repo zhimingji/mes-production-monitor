@@ -72,6 +72,7 @@ public class DwdWideTableJob {
         KafkaSource<String> orderKafkaSource = KafkaSource.<String>builder()
                 .setBootstrapServers(conf.getString("kafka.bootstrap.servers"))
                 .setTopics(conf.getString("kafka.ods.order.topic", Topics.ODS_MES_ORDER))
+                .setGroupId(conf.getString("kafka.group.id", "mes-production-monitor-dwd"))
                 .setStartingOffsets(orderStartupOffset(conf))
                 .setValueOnlyDeserializer(new SimpleStringSchema())
                 .build();
@@ -96,6 +97,7 @@ public class DwdWideTableJob {
         KafkaSource<String> reportKafkaSource = KafkaSource.<String>builder()
                 .setBootstrapServers(conf.getString("kafka.bootstrap.servers"))
                 .setTopics(conf.getString("kafka.ods.topic", Topics.ODS_MES_REPORT))
+                .setGroupId(conf.getString("kafka.group.id", "mes-production-monitor-dwd"))
                 .setStartingOffsets(reportStartupOffset(conf))
                 .setValueOnlyDeserializer(new SimpleStringSchema())
                 .build();

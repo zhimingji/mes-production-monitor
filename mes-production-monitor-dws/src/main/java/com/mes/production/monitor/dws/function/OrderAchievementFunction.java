@@ -16,7 +16,7 @@ import java.math.BigDecimal;
 import java.math.RoundingMode;
 
 /**
- * 订单级达成率的一级聚合。{@code keyBy(company + shiftDate + productionOrder)}。
+ * 订单级达成率的一级聚合。{@code keyBy(company + datasource + shiftDate + productionOrder)}。
  *
  * <h3>为什么只做到订单粒度</h3>
  * 维度级达成率需要二级聚合，而一级聚合的输出是<b>持续更新的值</b>，
@@ -118,7 +118,7 @@ public class OrderAchievementFunction
                 ? BigDecimal.ZERO
                 : (value.lotQuantity == null ? BigDecimal.ZERO : value.lotQuantity);
         if (oldQty != null) {
-            acc.reportQuantity = acc.reportQuantity.subtract(oldQty);
+            acc.reportQuantity = acc.reportQuantity.subtract(oldQty);//回撤旧报工数
         }
         acc.reportQuantity = acc.reportQuantity.add(newQty);
 
@@ -128,30 +128,34 @@ public class OrderAchievementFunction
             lastQtyByRecordId.put(recordKey, newQty);
         }
 
+        // 更新最后报工时间（单调取最大）
         if (value.outputDateTime > acc.lastReportTime) {
             acc.lastReportTime = value.outputDateTime;
         }
+        // 打版本号，保证同一个订单 key 下保留 version 最大的那行
         acc.version = ctx.timerService().currentProcessingTime();
+
+        // 把改完的 acc 写回 ValueState
         accState.update(acc);
 
         // 输出节流：只在没有 pending timer 时注册，避免每条报工注册一个 timer
         Boolean scheduled = emitScheduled.value();
-        if (scheduled == null || !scheduled) {
+        if (scheduled == null || !scheduled) { // 没有 pending timer 才注册
             long fireAt = ctx.timerService().currentProcessingTime() + emitIntervalMs;
-            ctx.timerService().registerProcessingTimeTimer(fireAt);
+            ctx.timerService().registerProcessingTimeTimer(fireAt);// 注册一个处理时间 timer
             emitScheduled.update(true);
         }
     }
 
     @Override
     public void onTimer(long timestamp, OnTimerContext ctx, Collector<OrderAchievement> out) throws Exception {
-        OrderAchievement acc = accState.value();
+        OrderAchievement acc = accState.value();// 读累计状态
         if (acc == null) {
             return;
         }
         long now = ctx.timerService().currentProcessingTime();
 
-        // 达成率（订单量为 0 时跳过，别抛 ArithmeticException）
+        // 达成率（订单量为 0 时跳过，别抛 ArithmeticException）= 累计报工数量 / 累计订单数量
         if (acc.orderQuantity > 0) {
             acc.achieveRate = acc.reportQuantity
                     .divide(BigDecimal.valueOf(acc.orderQuantity), 4, RoundingMode.HALF_UP);
@@ -165,10 +169,10 @@ public class OrderAchievementFunction
 
         out.collect(acc);
 
-        // 完工：停止定时输出，但【不】清状态——迟到修正仍需按 record 回撤，状态靠 TTL 兜底清理。
-        // 若这里 clear()，完工后再来一笔迟到修正会从 0 重算、丢历史累计量（changelog 语义的代价）。
+        // 完工：停止定时输出，但【不】清状态——迟到修正仍需按 record 回撤，状态靠 TTL 兜底清理
+        // 若这里 clear()，完工后再来一笔迟到修正会从 0 重算、丢历史累计量（changelog 语义的代价）
         if (isFinished(acc, now)) {
-            emitScheduled.clear();
+            emitScheduled.clear();// 完工：清标志，不再输出
             return;
         }
 
@@ -176,28 +180,47 @@ public class OrderAchievementFunction
         ctx.timerService().registerProcessingTimeTimer(now + emitIntervalMs);
     }
 
-    /** 计划进度 = 已用时间 / 生产周期。交期 <= 创建时间是脏数据（造数器刻意注入过），给 0 防除零 */
+    /**
+     * 计划进度（线性爬坡）= 已用时间 / 生产周期，结果截断到 [0, 1]。
+     *
+     * <p>业务含义：假设订单按「创建时间 → 交期」匀速推进，到 {@code now} 时刻理论上应完成多少。
+     * 它与达成率（实际完成比例）的差值就是 {@link OrderAchievement#progressDeviation()}，是 LAG 告警的依据。
+     *
+     * <p>防御点：
+     * <ul>
+     *   <li>created &lt;= 0 或 due &lt;= created：脏数据（造数器刻意注入过），分母非法，直接给 0；</li>
+     *   <li>elapsed 取 {@code max(0, now-created)}：now 早于创建时间（时钟回拨/乱序）时，已用时间不为负；</li>
+     *   <li>结果截断到 [0, 1]：超期后进度不再超过 100%。</li>
+     * </ul>
+     */
     private BigDecimal computePlanProgress(OrderAchievement acc, long now) {
         long created = acc.orderCreatedDate;
         long due = acc.orderDueDate;
         if (created <= 0 || due <= created) {
-            return BigDecimal.ZERO;
+            return BigDecimal.ZERO;   // 脏数据：分母非法（<=0 或负），防除零/除负
         }
-        BigDecimal elapsed = BigDecimal.valueOf(Math.max(0L, now - created));
-        BigDecimal total = BigDecimal.valueOf(due - created);
-        BigDecimal progress = elapsed.divide(total, 4, RoundingMode.HALF_UP);
+        BigDecimal elapsed = BigDecimal.valueOf(Math.max(0L, now - created)); // 已用时间，截断不为负
+        BigDecimal total = BigDecimal.valueOf(due - created);                 // 生产周期 = 交期 - 创建时间
+        BigDecimal progress = elapsed.divide(total, 4, RoundingMode.HALF_UP); // 保留 4 位小数
         if (progress.signum() < 0) {
-            return BigDecimal.ZERO;
+            return BigDecimal.ZERO;   // 理论上不会到这（elapsed 已 >=0），双保险
         }
         if (progress.compareTo(BigDecimal.ONE) > 0) {
-            return BigDecimal.ONE;
+            return BigDecimal.ONE;    // 已超期：进度封顶 100%
         }
         return progress;
     }
 
+    /**
+     * 订单是否完工 = 达成率已到 100% 且已过交期，两个条件都要满足。
+     *
+     * <p>只到 100% 但还没到交期 → 未完工，继续输出（计划进度还在爬坡）；只过交期但没达标 → 也未完工，
+     * 继续输出（可能是 LAG，要交给告警，不能当完工停掉）。完工后 {@code onTimer} 只清节流标记、不再续订
+     * timer，但【不清状态】——迟到的修正/删除仍需按 record 回撤，状态靠 TTL 兜底清理。
+     */
     private boolean isFinished(OrderAchievement acc, long now) {
-        boolean achieved = acc.achieveRate != null && acc.achieveRate.compareTo(BigDecimal.ONE) >= 0;
-        boolean pastDue = acc.orderDueDate > 0 && now >= acc.orderDueDate;
+        boolean achieved = acc.achieveRate != null && acc.achieveRate.compareTo(BigDecimal.ONE) >= 0; // 达成率 >= 100%
+        boolean pastDue = acc.orderDueDate > 0 && now >= acc.orderDueDate;                              // 已过交期（dueDate<=0 视为无交期，永不完工）
         return achieved && pastDue;
     }
 }

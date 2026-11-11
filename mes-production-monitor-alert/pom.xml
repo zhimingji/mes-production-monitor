@@ -35,6 +35,11 @@
             <groupId>org.apache.flink</groupId>
             <artifactId>flink-connector-kafka</artifactId>
         </dependency>
+        <!-- DeliveryGuarantee 所在包：flink-connector-kafka 把它标成 provided 不会传递，需显式声明 -->
+        <dependency>
+            <groupId>org.apache.flink</groupId>
+            <artifactId>flink-connector-base</artifactId>
+        </dependency>
         <!-- 告警作业状态较大，必须 RocksDB + 增量 checkpoint，见文档 6.4.1 -->
         <dependency>
             <groupId>org.apache.flink</groupId>

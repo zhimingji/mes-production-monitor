@@ -1,10 +1,14 @@
 package com.mes.production.monitor.alert.function;
 
+import com.mes.production.monitor.common.enums.AlertLevel;
+import com.mes.production.monitor.common.enums.AlertType;
+import com.mes.production.monitor.common.metric.MetricNames;
 import com.mes.production.monitor.common.model.AlertRecord;
 import com.mes.production.monitor.common.model.DwdReportRecord;
 import org.apache.flink.api.common.state.ValueState;
 import org.apache.flink.api.common.state.ValueStateDescriptor;
 import org.apache.flink.configuration.Configuration;
+import org.apache.flink.metrics.MetricGroup;
 import org.apache.flink.streaming.api.functions.KeyedProcessFunction;
 import org.apache.flink.util.Collector;
 
@@ -46,6 +50,12 @@ public class LineIdleDetectFunction
     private transient ValueState<Long> registeredTimer;
     /** 当前告警级别（AlertLevel 的 name()） */
     private transient ValueState<String> currentLevel;
+    /** 产线身份（onTimer 只有 key、没有 DwdReportRecord，须从状态取回） */
+    private transient ValueState<String> company;
+    private transient ValueState<String> lineCode;
+    /** 首次触发时间（升级/恢复时保持 alert_time 不变，避免 CK 覆盖成升级时间） */
+    private transient ValueState<Long> firstAlertTime;
+    private transient MetricGroup metricGroup;
 
     public LineIdleDetectFunction(long idleThresholdMs, long escalateIntervalMs) {
         this.idleThresholdMs = idleThresholdMs;
@@ -61,38 +71,111 @@ public class LineIdleDetectFunction
                 .getState(new ValueStateDescriptor<>("registered-timer", Long.class));
         this.currentLevel = getRuntimeContext()
                 .getState(new ValueStateDescriptor<>("current-level", String.class));
+        this.company = getRuntimeContext()
+                .getState(new ValueStateDescriptor<>("company", String.class));
+        this.lineCode = getRuntimeContext()
+                .getState(new ValueStateDescriptor<>("linecode", String.class));
+        this.firstAlertTime = getRuntimeContext()
+                .getState(new ValueStateDescriptor<>("first-alert-time", Long.class));
+        this.metricGroup = getRuntimeContext().getMetricGroup().addGroup(MetricNames.GROUP);
     }
 
     @Override
     public void processElement(DwdReportRecord value,
                               Context ctx,
                               Collector<AlertRecord> out) throws Exception {
-        // TODO(M5-1) 有报工到达时：
-        //   1) 更新 lastReportTs = ctx.timerService().currentProcessingTime()
-        //   2) 如果当前有告警（currentLevel != NONE），说明产线恢复了：
-        //      输出一条 recoverTime 非空的 AlertRecord 关闭告警，currentLevel 置 NONE。
-        //      注意 alertId 必须与首次触发时一致，否则 ClickHouse 里会多出一条记录
-        //      而不是覆盖原记录。
-        //   3) 重置续期 Timer：
-        //      先 deleteProcessingTimeTimer(旧值)，再
-        //      registerProcessingTimeTimer(now + idleThresholdMs)，
-        //      并把新时间戳存进 registeredTimer。
-        //
-        //   【为什么要先删】不删的话每条报工都注册一个新 Timer，
-        //   状态里会堆积大量 Timer，且旧 Timer 到点会误判漏报。
-        throw new UnsupportedOperationException("TODO(M5-1): 见方法内注释");
+        long now = ctx.timerService().currentProcessingTime();
+
+        // 1) 更新最后报工时间 + 记录产线身份（供 onTimer 取回）
+        lastReportTs.update(now);
+        company.update(nvl(value.company));
+        lineCode.update(nvl(value.lineCode));
+
+        // 2) 有报工到达：若当前有告警，说明产线恢复，输出 recoverTime 关闭告警。
+        //    alertId 与首次触发时一致，否则 ClickHouse 里会多出一条记录而不是覆盖。
+        String current = currentLevel.value();
+        if (current != null && !AlertLevel.NONE.name().equals(current)) {
+            String c = nvl(value.company);
+            String l = nvl(value.lineCode);
+            long alertTime = firstAlertTime.value() == null ? now : firstAlertTime.value();
+            out.collect(build(AlertLevel.NONE.name(), c, l, alertTime, now, now));
+            currentLevel.update(AlertLevel.NONE.name());
+            firstAlertTime.clear();
+        }
+
+        // 3) 重置续期 Timer：先删旧再注册新，否则每条报工堆积一个 Timer、旧 Timer 到点误判漏报。
+        Long old = registeredTimer.value();
+        if (old != null) {
+            ctx.timerService().deleteProcessingTimeTimer(old);
+        }
+        long fireAt = now + idleThresholdMs;
+        registeredTimer.update(fireAt);
+        ctx.timerService().registerProcessingTimeTimer(fireAt);
     }
 
     @Override
     public void onTimer(long timestamp, OnTimerContext ctx, Collector<AlertRecord> out) throws Exception {
-        // TODO(M5-2) Timer 触发 = 该产线静默超阈值：
-        //   1) 再校验一次 lastReportTs：Timer 可能是过期的旧 Timer（虽然上面已删，仍要防御）。
-        //      if (now - lastReportTs < idleThresholdMs) return;
-        //   2) 级别升级：currentLevel = AlertLevel.valueOf(currentLevel).escalate()
-        //   3) 输出 AlertRecord（alertType = MISSING_REPORT，alertId 保持稳定）
-        //   4) 若还没到 P1，继续注册下一个升级 Timer：
-        //      registerProcessingTimeTimer(now + escalateIntervalMs)
-        //      到 P1 后停止升级，避免无限刷屏
-        throw new UnsupportedOperationException("TODO(M5-2): 见方法内注释");
+        long now = ctx.timerService().currentProcessingTime();
+
+        // 1) 再校验一次 lastReportTs：Timer 可能是过期的旧 Timer（虽然上面已删，仍要防御）。
+        Long last = lastReportTs.value();
+        if (last == null || now - last < idleThresholdMs) {
+            return;
+        }
+
+        String c = nvl(company.value());
+        String l = nvl(lineCode.value());
+
+        // 2) 级别升级：NONE -> P3 -> P2 -> P1（P1 为终态）
+        String current = currentLevel.value();
+        AlertLevel next = AlertLevel.valueOf(current == null ? AlertLevel.NONE.name() : current).escalate();
+        currentLevel.update(next.name());
+
+        // 首次触发时间：从 NONE 升到 P3 时记录，后续升级保持不变
+        long alertTime = now;
+        if (firstAlertTime.value() != null) {
+            alertTime = firstAlertTime.value();
+        } else {
+            firstAlertTime.update(now);
+        }
+
+        // 3) 输出 AlertRecord（alertType = MISSING_REPORT，alertId 保持稳定）
+        out.collect(build(next.name(), c, l, alertTime, 0L, now));
+        fireAlertMetric(AlertType.MISSING_REPORT.name(), next.name());
+
+        // 4) 若还没到 P1，继续注册下一个升级 Timer；到 P1 停止升级，避免无限刷屏
+        if (next != AlertLevel.P1) {
+            long fireAt = now + escalateIntervalMs;
+            registeredTimer.update(fireAt);
+            ctx.timerService().registerProcessingTimeTimer(fireAt);
+        } else {
+            registeredTimer.clear();
+        }
+    }
+
+    private AlertRecord build(String level, String c, String l,
+                              long alertTime, long recoverTime, long version) {
+        AlertRecord a = new AlertRecord();
+        a.alertId = AlertType.MISSING_REPORT.name() + ":" + c + ":" + l;
+        a.alertType = AlertType.MISSING_REPORT.name();
+        a.level = level;
+        a.company = c;
+        a.lineCode = l;
+        a.productionOrder = null; // 漏报是产线级，无订单
+        a.orderQuantity = 0;
+        a.reportQuantity = null;
+        a.achieveRate = null;
+        a.alertTime = alertTime;
+        a.recoverTime = recoverTime;
+        a.version = version;
+        return a;
+    }
+
+    private void fireAlertMetric(String type, String level) {
+        metricGroup.addGroup(type).addGroup(level).counter(MetricNames.ALERT_FIRED_COUNT).inc();
+    }
+
+    private static String nvl(String s) {
+        return s == null ? "" : s;
     }
 }

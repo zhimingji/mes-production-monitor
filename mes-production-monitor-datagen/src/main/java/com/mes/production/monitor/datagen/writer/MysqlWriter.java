@@ -7,7 +7,9 @@ import org.slf4j.LoggerFactory;
 
 import java.sql.Connection;
 import java.sql.PreparedStatement;
+import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -93,6 +95,33 @@ public class MysqlWriter implements AutoCloseable {
             return ps.executeUpdate();
         } catch (SQLException e) {
             throw new IllegalStateException("执行失败, db=" + db + ", sql=" + sql, e);
+        }
+    }
+
+    /**
+     * 查询，返回每一行各列的 Object[]（列顺序与 SELECT 一致）。
+     * 异常注入器用它读取现有数据（订单量、产线等）再做定向修改。
+     */
+    public List<Object[]> query(String db, String sql, Object... params) {
+        try (Connection conn = pool(db).getConnection();
+             PreparedStatement ps = conn.prepareStatement(sql)) {
+            for (int i = 0; i < params.length; i++) {
+                ps.setObject(i + 1, params[i]);
+            }
+            try (ResultSet rs = ps.executeQuery()) {
+                List<Object[]> rows = new ArrayList<>();
+                int cols = rs.getMetaData().getColumnCount();
+                while (rs.next()) {
+                    Object[] row = new Object[cols];
+                    for (int i = 0; i < cols; i++) {
+                        row[i] = rs.getObject(i + 1);
+                    }
+                    rows.add(row);
+                }
+                return rows;
+            }
+        } catch (SQLException e) {
+            throw new IllegalStateException("查询失败, db=" + db + ", sql=" + sql, e);
         }
     }
 

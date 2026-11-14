@@ -1,5 +1,6 @@
 package com.mes.production.monitor.datagen;
 
+import com.mes.production.monitor.common.constant.MesConstants;
 import com.mes.production.monitor.common.util.JobConfig;
 import com.mes.production.monitor.datagen.anomaly.AnomalyConfig;
 import com.mes.production.monitor.datagen.anomaly.AnomalyInjector;
@@ -8,6 +9,9 @@ import com.mes.production.monitor.datagen.generator.ReportGenerator;
 import com.mes.production.monitor.datagen.writer.MysqlWriter;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  * 造数入口。见文档 9.3 / 9.3.1。
@@ -42,6 +46,17 @@ public class DataGenApp {
 
         AnomalyConfig anomalyConfig = AnomalyConfig.from(conf);
 
+        int scale = conf.getInt("datagen.scale", 1);
+        int workCentersPerSite = conf.getInt("datagen.workcenters.per.site", 8);
+        int partCount = conf.getInt("datagen.part.count", 200);
+        int userCount = conf.getInt("datagen.user.count", 50);
+        int orderCount = scale * conf.getInt("datagen.order.count", 300);
+        int manualCount = scale * conf.getInt("datagen.manual.report.count", 2000);
+        int barcodeCount = scale * conf.getInt("datagen.barcode.report.count", 3000);
+        int recordsPerLpn = conf.getInt("datagen.barcode.records.per.lpn", 5);
+        int dayBatch = conf.getInt("streaming.day.shift.batch", 20);
+        int nightBatch = conf.getInt("streaming.night.shift.batch", 4);
+
         try (MysqlWriter writer = new MysqlWriter(
                 conf.getString("mysql.jdbc.url.template"),
                 conf.getString("mysql.username"),
@@ -49,10 +64,10 @@ public class DataGenApp {
                 conf.getInt("datagen.batch.size", 1000))) {
 
             DimGenerator dimGen = new DimGenerator(writer,
-                    conf.getInt("datagen.workcenters.per.site", 8),
-                    conf.getInt("datagen.part.count", 200),
-                    conf.getInt("datagen.user.count", 50));
-            ReportGenerator reportGen = new ReportGenerator(writer, anomalyConfig);
+                    workCentersPerSite, partCount, userCount);
+            ReportGenerator reportGen = new ReportGenerator(writer, anomalyConfig,
+                    workCentersPerSite, partCount, userCount, orderCount, recordsPerLpn,
+                    dayBatch, nightBatch);
             AnomalyInjector injector = new AnomalyInjector(writer, anomalyConfig);
 
             LOG.info("造数模式: {}", mode);
@@ -61,26 +76,50 @@ public class DataGenApp {
                     forEachDatabase((db, company) -> dimGen.generate(db, company));
                     break;
 
-                case "backfill":
-                    // TODO(M1-5) 历史回填：
-                    //   1) 先 dim（引用完整性顺序：维表 -> 订单 -> 报工）
-                    //   2) reportGen.generateOrders(...)
-                    //   3) reportGen.generateManualReports(...)
-                    //   4) 旧库额外 reportGen.generateBarcodeReports(...)
-                    //   规模参照文档 9.3：每基地 ~300 订单 / ~2000 手动报工 / ~3000 扫码，
-                    //   跑通后把 datagen.scale 放大 10 倍造"规模感"。
-                    throw new UnsupportedOperationException("TODO(M1-5): 见 switch 分支注释");
+                case "backfill": {
+                    long to = System.currentTimeMillis();
+                    long from = to - conf.getLong("backfill.days", 7) * 24L * 3600_000L;
+                    // 引用完整性顺序：维表 -> 订单 -> 报工；旧库额外扫码（文档 9.3.1）
+                    forEachDatabase((db, company) -> {
+                        dimGen.generate(db, company);
+                        reportGen.generateOrders(db, company, orderCount, from, to);
+                        reportGen.generateManualReports(db, company, manualCount, from, to);
+                        if (db.startsWith(MesConstants.DB_PREFIX_OLD)) {
+                            reportGen.generateBarcodeReports(db, company, barcodeCount, from, to);
+                        }
+                    });
+                    break;
+                }
 
-                case "streaming":
-                    // TODO(M1-6) 持续实时模式：
-                    //   为 10 个库各起一个线程跑 reportGen.runStreaming(...)，
-                    //   主线程注册 shutdown hook 优雅退出。
-                    throw new UnsupportedOperationException("TODO(M1-6): 见 switch 分支注释");
+                case "streaming": {
+                    long intervalMs = conf.getLong("streaming.interval.ms", 1000);
+                    List<Thread> threads = new ArrayList<>();
+                    for (String company : COMPANIES) {
+                        for (String prefix : new String[]{MesConstants.DB_PREFIX_OLD, MesConstants.DB_PREFIX_NEW}) {
+                            String db = prefix + company;
+                            Thread t = new Thread(() -> reportGen.runStreaming(db, company, intervalMs),
+                                    "stream-" + db);
+                            t.start();
+                            threads.add(t);
+                        }
+                    }
+                    Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+                        LOG.info("收到退出信号，停止 streaming");
+                        reportGen.stop();
+                    }));
+                    LOG.info("streaming 已启动 {} 个库的写入线程，Ctrl+C 退出", threads.size());
+                    for (Thread t : threads) {
+                        t.join();
+                    }
+                    break;
+                }
 
-                case "anomaly":
-                    // TODO(M1.5-6) 按 --anomaly.type 分派到 injector 的各个方法。
-                    //   建议一次只注入一种，确认该类告警能被准确捕获后再开下一种。
-                    throw new UnsupportedOperationException("TODO(M1.5-6): 见 switch 分支注释");
+                case "anomaly": {
+                    String type = conf.getString("anomaly.type", "correction");
+                    // 建议一次只注入一种，确认该类告警能被准确捕获后再开下一种（文档 9.3.1）
+                    forEachDatabase((db, company) -> dispatchAnomaly(injector, anomalyConfig, type, db));
+                    break;
+                }
 
                 default:
                     throw new IllegalArgumentException(
@@ -90,10 +129,33 @@ public class DataGenApp {
         }
     }
 
+    private static void dispatchAnomaly(AnomalyInjector injector, AnomalyConfig cfg, String type, String db) {
+        switch (type) {
+            case "correction":
+                injector.injectCorrection(db);
+                break;
+            case "line-idle":
+                injector.injectLineIdle(db, cfg.idleLineCount, cfg.idleDurationMinutes);
+                break;
+            case "over-report":
+                injector.injectOverReport(db);
+                break;
+            case "lag":
+                injector.injectLag(db);
+                break;
+            case "out-of-order":
+                injector.injectOutOfOrder(db);
+                break;
+            default:
+                throw new IllegalArgumentException("未知 anomaly.type: " + type
+                        + "（可选 correction / line-idle / over-report / lag / out-of-order）");
+        }
+    }
+
     /** 遍历 10 个库（5 基地 × 新旧 MES） */
     private static void forEachDatabase(DatabaseAction action) {
         for (String company : COMPANIES) {
-            for (String prefix : new String[]{"mes_old_", "mes_new_"}) {
+            for (String prefix : new String[]{MesConstants.DB_PREFIX_OLD, MesConstants.DB_PREFIX_NEW}) {
                 action.apply(prefix + company, company);
             }
         }

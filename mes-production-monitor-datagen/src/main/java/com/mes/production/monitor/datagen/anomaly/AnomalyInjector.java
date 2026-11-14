@@ -5,6 +5,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -129,20 +130,39 @@ public class AnomalyInjector {
     }
 
     /**
-     * 注入进度滞后：把部分订单的 duedate 提前到 createddate 后 2 小时。
-     * 计划周期被压缩到 2 小时，而订单是几天前创建的，计划进度立刻到 100%，
-     * 达成率还停留在低位 → LAG。验证 LAG 告警 + P3→P2→P1 分级升级 + 追上进度后的恢复。
+     * 注入进度滞后：把部分订单的达成率精确压到 {@code 计划进度 × (1 - lagBehindRatio)}，
+     * 同时把 duedate 压缩到 createddate 后 2 小时让计划进度立即到 100%。
+     * 两者叠加：达成率 ≈ 1 - lagBehindRatio，计划进度 = 100%，缺口 ≈ lagBehindRatio > lag.threshold，
+     * LAG 稳定触发。验证 LAG 告警 + P3→P2→P1 分级升级 + 追上进度后的恢复。
+     *
+     * <p>实现：查每个订单的累计报工量 SUM(lot.finishedquantity)，把 orderquantity 调到
+     * {@code 累计 / (1 - lagBehindRatio)}。只调 orderquantity 不动报工明细，避免破坏对账基线。
      */
     public void injectLag(String db) {
         List<Object[]> orders = writer.query(db,
-                "SELECT productionorderid FROM productionorder ORDER BY productionorderid");
+                "SELECT p.productionorderid, COALESCE(SUM(l.finishedquantity), 0) "
+                        + "FROM productionorder p "
+                        + "LEFT JOIN lot l ON l.productionorderid = p.productionorderid "
+                        + "GROUP BY p.productionorderid ORDER BY p.productionorderid");
         int target = Math.max(1, (int) Math.round(orders.size() * config.lagOrderRatio));
         int n = 0;
         for (int i = 0; i < target; i++) {
-            long orderId = ((Number) orders.get(i)[0]).longValue();
+            Object[] o = orders.get(i);
+            long orderId = ((Number) o[0]).longValue();
+            BigDecimal reportTotal = (BigDecimal) o[1];
+            // 无报工的订单不会产生 DwdReportRecord，告警处理不到它，跳过
+            if (reportTotal.signum() <= 0) {
+                continue;
+            }
+            // behindRatio 须在 (0, 1)，做防御性夹取避免除零/除负
+            double behind = Math.max(0.0, Math.min(0.99, config.lagBehindRatio));
+            BigDecimal denom = BigDecimal.valueOf(1.0 - behind);
+            // 向上取整保证达成率 <= (1 - behind)，缺口 >= behind，稳定触发 LAG
+            long newQty = reportTotal.divide(denom, 0, RoundingMode.UP).longValue();
             n += writer.execute(db,
-                    "UPDATE productionorder SET duedate = DATE_ADD(createddate, INTERVAL 2 HOUR) "
-                            + "WHERE productionorderid = ?", orderId);
+                    "UPDATE productionorder SET orderquantity = ?, "
+                            + "duedate = DATE_ADD(createddate, INTERVAL 2 HOUR) "
+                            + "WHERE productionorderid = ?", newQty, orderId);
         }
         LOG.info("[{}] 注入滞后完成: {} 单", db, n);
     }

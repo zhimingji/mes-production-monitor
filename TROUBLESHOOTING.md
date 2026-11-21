@@ -163,3 +163,67 @@
 - 根因：0.8.6 新客户端把 `compress` 当布尔值解析，旧 URL 里 `compress=0`（0.7.2 接受 0/1 整数）不再合法。
 - 解决：`compress=0` → `compress=false`；顺带把三份 properties 的 CK URL 统一成 `jdbc:clickhouse:http://hadoop1:8123/mes_production_monitor?compress=false`（见上一条，弃用 `jdbc:ch://`）。
 - 面试可讲点：依赖大版本升级后，配置里的「数字开关」类参数常会从 `0/1` 收紧成 `true/false`，升级后先 grep 一遍 URL/连接串里的这类参数，比等作业跑到一半才报错省一轮提交。
+
+---
+
+## 集群部署与测试阶段踩的坑
+
+### 14. YARN 多作业部署：第 3/4 个作业永远卡 ACCEPTED
+
+- 阶段：集群部署
+- 现象：前两个 Flink 作业正常 RUNNING，第 3 个提交后一直停在 ACCEPTED，内存明明没用满。
+- 排查：`yarn queue -status default` 看 Current Capacity——卡 ACCEPTED + 内存没用满 = **AM 名额问题，不是内存问题**。
+- 根因：`yarn.scheduler.capacity.maximum-am-resource-percent` 默认 0.1（10%）。Flink application 模式每个作业的 JobManager 就是一个 AM，2 个 JM 就把 10% 占满。
+- 解决：`maximum-am-resource-percent` 调到 0.5（`capacity-scheduler.xml` + `yarn rmadmin -refreshQueues`），同步到各节点。
+- 面试可讲点：application 模式下 JM 即 AM，多作业部署要先算 AM 配额，不能只盯着内存。
+
+### 15. Flink JobManager 内存设 512m 起不来
+
+- 阶段：集群部署
+- 报错原文：`Total Flink Memory (64mb) < Off-heap Memory (128mb)`
+- 根因：Flink 1.18 JM 有最低内存要求，512m 扣掉各组件后剩余堆 < off-heap，直接拒绝启动。
+- 解决：JM ≥ ~600m（统一用 1024m）；TM 也别低于 ~700m。
+
+### 16. DWS OOM：clickhouse-jdbc executeBatch 把整批拼成一条超大 INSERT
+
+- 阶段：M4
+- 现象：DWS 作业写 CK 时 OOM，堆打爆。
+- 根因：clickhouse-jdbc 的 `executeBatch` 会把整批拼成一条超大 INSERT SQL 字符串，`StringBuilder.toString()` 时堆打爆；`batch=2000` 时尤其严重。
+- 解决：`clickhouse.batch.size` 2000 → 100，`flush.interval.ms` 5000 → 2000（alert 本来 batch 100 无此问题）。**改配置后必须重新打包 dws 才生效。**
+
+### 17. ClickHouseBatchSink 复用 PreparedStatement 导致数据翻倍 + OOM
+
+- 阶段：M4
+- 现象：写进 CK 的数据翻倍，SQL 字符串暴涨，最终 OOM。
+- 根因：clickhouse-jdbc 0.8.x 复用同一 `PreparedStatement` 时，`executeBatch` / `clearBatch` 会**累积批**（重复 INSERT 之前的行）。
+- 解决：每次 flush 新建 `PreparedStatement`（try-with-resources 用完即关），不再复用。
+- 面试可讲点：JDBC 批处理语义在不同驱动里不一致，复用 statement 前要确认驱动的 `clearBatch` 到底清没清——不要默认它和别的驱动行为一样。
+
+### 18. DWS 并行度 4 时 OOM（RocksDB 划走 40% 堆）
+
+- 阶段：M4
+- 现象：DWS 并行度 4 时 4 个子任务共享 ~390m 堆，易 OOM。
+- 根因：RocksDB 状态后端默认划走一部分堆内存，并行度越高单子任务可用堆越小。
+- 解决：提交时加 `--job.parallelism 1`（注意放 jar 路径之后）。
+
+### 19. clickhouse-client 连 9000 报 Broken pipe（native 端口其实是 9001）
+
+- 阶段：集群
+- 现象：`clickhouse-client -h hadoop1 --port 9000` 执行 `DROP DATABASE` 报 `Code: 210 DB::NetException: Broken pipe, while writing to socket`，伴随 `could not determine server time zone` 警告。
+- 根因：hadoop1 上 CK 的 **native 端口是 9001 不是 9000**（9000 让给宿主机其他服务），且 native 只绑本机，要连 `127.0.0.1`。JDBC（Flink 作业）走的是 HTTP 8123，和 native 9001 是两回事。
+- 解决：`clickhouse-client --host 127.0.0.1 --port 9001 -u default --password '...'`。
+- 面试可讲点：CK 有两个协议两个端口——native（`clickhouse-client` 用）和 HTTP（JDBC 用），排查连接问题先分清协议和端口。
+
+### 20. 删 Kafka topic 后重建报「已存在」
+
+- 阶段：集群
+- 现象：`kafka-topics.sh --delete` 后 `--create` 仍提示 topic 已存在（删除没生效）。
+- 根因：broker 关了 `delete.topic.enable`（Kafka 默认 true，部分集群为安全会关掉）。
+- 解决：`server.properties` 打开 `delete.topic.enable=true` 并重启 broker。
+
+### 21. 删 Kafka consumer group 报非空删不掉
+
+- 阶段：集群
+- 现象：`kafka-consumer-groups.sh --delete` 删不掉，报 group 非 Empty。
+- 根因：作业还在跑，group 处于 active 状态。
+- 解决：先 `yarn application -kill <appId>` 停掉作业，再删 group。
